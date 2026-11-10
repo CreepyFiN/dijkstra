@@ -16,6 +16,7 @@ import numpy as np
 import osmnx as ox
 
 from convert_to_csr import CsrData, UINT32_MAX, UINT64_MAX, graph_to_csr, write_csr
+from download_osm import resolve_graphml
 
 ROOT = Path(__file__).resolve().parents[1]
 SEED = 918898
@@ -224,8 +225,9 @@ def main() -> int:
                                    original_graph=graph)
             print(f"PASS {name}: both CPU algorithms vs Bellman-Ford", flush=True)
         real_validated = False
-        if args.real_graphml.exists():
-            graph = ox.load_graphml(args.real_graphml)
+        real_graphml = resolve_graphml(args.real_graphml)
+        if real_graphml.exists():
+            graph = ox.load_graphml(real_graphml)
             require(len(graph) >= 3, "Real region graph has fewer than three nodes")
             sources = [0, len(graph) // 2, len(graph) - 1]
             runs += validate_graph(graph, args.executable, args.output_dir / "real_osm",

@@ -3,21 +3,24 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import math
 import os
 from pathlib import Path
+import re
 import sys
 import time
 from datetime import datetime, timezone
 
 import osmnx as ox
+from osmnx._errors import ResponseStatusCodeError
 import requests
 from shapely.geometry import mapping, shape
 
 ROOT = Path(__file__).resolve().parents[1]
-USER_AGENT = "pohjois-savo-dijkstra/1.0 (educational one-off OSM road-network download)"
+USER_AGENT = "pohjois-savo-dijkstra/1.0 (+https://github.com/CreepyFiN/dijkstra)"
 GRAPH_OPTIONS = dict(network_type="drive", simplify=False, retain_all=True, truncate_by_edge=False)
 ATTRIBUTION = "© OpenStreetMap contributors; https://www.openstreetmap.org/copyright"
 
@@ -30,11 +33,19 @@ def write_json(path: Path, value: object) -> None:
 
 
 def file_sha256(path: Path) -> str:
+    """Hash GraphML content, decompressing .gz archives before hashing."""
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def resolve_graphml(path: Path) -> Path:
+    """Use the repository's compressed GraphML when an uncompressed file is absent."""
+    compressed = path.with_name(path.name + ".gz")
+    return compressed if not path.exists() and compressed.is_file() else path
 
 
 def validate_boundary(result: dict):
@@ -113,18 +124,39 @@ def validate_osm_graph(graph) -> None:
             raise ValueError(f"Invalid length at OSM edge {(u, v, key)}")
 
 
-def download(data_dir: Path, user_agent: str, nominatim_url: str, overpass_url: str) -> Path:
+def fetch_graph(polygon, *, max_attempts: int = 4):
+    """Retry temporary failures using OSMnx's cached successful responses."""
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be positive")
+    for attempt in range(max_attempts):
+        try:
+            return ox.graph_from_polygon(polygon, **GRAPH_OPTIONS)
+        except (requests.Timeout, requests.ConnectionError, ResponseStatusCodeError) as error:
+            if isinstance(error, ResponseStatusCodeError) and not re.search(r"responded: 50[234]\b", str(error)):
+                raise
+            if attempt + 1 == max_attempts:
+                raise
+            delay = 60 * 2**attempt
+            print(f"Temporary Overpass failure: {error}\n"
+                  f"Retry {attempt + 2}/{max_attempts} in {delay}s; successful responses remain cached.",
+                  file=sys.stderr, flush=True)
+            time.sleep(delay)
+
+
+def download(data_dir: Path, user_agent: str, nominatim_url: str, overpass_url: str,
+             pbf_path: Path | None = None) -> Path:
     raw_dir, metadata_dir = data_dir / "raw", data_dir / "metadata"
     raw_dir.mkdir(parents=True, exist_ok=True)
     metadata_dir.mkdir(parents=True, exist_ok=True)
     raw_path = raw_dir / "pohjois_savo.graphml"
     metadata_path = metadata_dir / "download.json"
-    if raw_path.exists():
+    existing_path = resolve_graphml(raw_path)
+    if existing_path.exists():
         existing = json.loads(metadata_path.read_text(encoding="utf-8"))
-        if existing.get("status") != "success" or existing.get("graph_sha256") != file_sha256(raw_path):
+        if existing.get("status") != "success" or existing.get("graph_sha256") != file_sha256(existing_path):
             raise ValueError("Existing GraphML does not match successful download metadata")
-        print(f"Using previously downloaded GraphML: {raw_path}")
-        return raw_path
+        print(f"Using previously downloaded GraphML: {existing_path}")
+        return existing_path
     metadata = {
         "region": "Pohjois-Savo, Finland", "iso3166_2": "FI-15",
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -132,8 +164,11 @@ def download(data_dir: Path, user_agent: str, nominatim_url: str, overpass_url: 
         "license": "ODbL-1.0", "osmnx_version": ox.__version__,
         "graph_options": GRAPH_OPTIONS, "weight": "OSMnx length, metres",
         "user_agent": user_agent, "nominatim_url": nominatim_url,
-        "overpass_url": overpass_url,
     }
+    if pbf_path is None:
+        metadata["overpass_url"] = overpass_url
+    else:
+        metadata["source"] = {"type": "osm_extract", "file": pbf_path.name}
     write_json(metadata_path, metadata)
     try:
         ox.settings.use_cache = True
@@ -151,7 +186,12 @@ def download(data_dir: Path, user_agent: str, nominatim_url: str, overpass_url: 
                         boundary_display_name=result["display_name"],
                         boundary_geometry_type=polygon.geom_type)
         write_json(metadata_path, metadata)
-        graph = ox.graph_from_polygon(polygon, **GRAPH_OPTIONS)
+        if pbf_path is None:
+            graph = fetch_graph(polygon)
+        else:
+            from extract_osm import graph_from_extract
+            graph, metadata["source"] = graph_from_extract(
+                pbf_path, polygon, metadata_dir / "cache", GRAPH_OPTIONS)
         validate_osm_graph(graph)
         temporary = raw_path.with_suffix(".graphml.tmp")
         ox.save_graphml(graph, filepath=temporary)
@@ -177,11 +217,12 @@ def main() -> int:
     parser.add_argument("--user-agent", default=os.environ.get("OSM_USER_AGENT", USER_AGENT))
     parser.add_argument("--nominatim-url", default="https://nominatim.openstreetmap.org")
     parser.add_argument("--overpass-url", default="https://overpass-api.de/api")
+    parser.add_argument("--pbf", type=Path, help="Read a real local OSM PBF extract instead of Overpass")
     args = parser.parse_args()
     try:
         if not args.user_agent.strip():
             raise ValueError("A nonempty application User-Agent is required")
-        download(args.data_dir, args.user_agent, args.nominatim_url, args.overpass_url)
+        download(args.data_dir, args.user_agent, args.nominatim_url, args.overpass_url, args.pbf)
     except (Exception, KeyboardInterrupt) as error:
         print(f"OSM download failed: {type(error).__name__}: {error}", file=sys.stderr)
         return 1

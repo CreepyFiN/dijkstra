@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import csv
+import gzip
 import json
 import math
 import os
@@ -12,6 +13,7 @@ import sys
 
 import networkx as nx
 import numpy as np
+import osmium
 import osmnx as ox
 import pytest
 from shapely.geometry import Polygon, mapping
@@ -20,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 
 import download_osm
+import extract_osm
 from convert_to_csr import MAGIC, UINT32_MAX, UINT64_MAX, binary_size, graph_to_csr, write_csr
 from validate import (check_route, check_sssp, make_hand_graph, make_random_graph,
                       reference_distances, run_cpp, validate_graph)
@@ -341,6 +344,80 @@ def test_download_failure_never_creates_fake_graph(tmp_path, monkeypatch):
     assert metadata["status"] == "failed" and "simulated network failure" in metadata["error"]
 
 
+def test_compressed_graphml_reuse_and_conversion(tmp_path, monkeypatch, probe):
+    raw_dir = tmp_path / "raw"
+    metadata_dir = tmp_path / "metadata"
+    raw_dir.mkdir()
+    metadata_dir.mkdir()
+    original = tmp_path / "original.graphml"
+    graph = make_hand_graph()
+    ox.save_graphml(graph, original)
+    compressed = raw_dir / "pohjois_savo.graphml.gz"
+    with gzip.open(compressed, "wb") as stream:
+        stream.write(original.read_bytes())
+    digest = download_osm.file_sha256(original)
+    assert download_osm.file_sha256(compressed) == digest
+    download_osm.write_json(metadata_dir / "download.json", {"status": "success", "graph_sha256": digest})
+
+    def unexpected_network(*args, **kwargs):
+        pytest.fail("An existing verified GraphML archive must not trigger a network request")
+
+    monkeypatch.setattr(download_osm, "fetch_boundary", unexpected_network)
+    assert download_osm.download(tmp_path, "test/1.0", "https://example.test", "https://example.test/api") == compressed
+    uncompressed_path = raw_dir / "pohjois_savo.graphml"
+    assert download_osm.resolve_graphml(uncompressed_path) == compressed
+    assert download_osm.resolve_graphml(original) == original
+    subprocess.run([sys.executable, str(ROOT / "python/convert_to_csr.py"), "--graphml", str(uncompressed_path),
+                    "--output-dir", str(tmp_path / "processed")], capture_output=True, text=True, check=True)
+    binary = tmp_path / "processed/graph.csr"
+    decoded = json.loads(subprocess.check_output([str(probe), str(binary)], text=True))
+    data = graph_to_csr(graph)
+    assert decoded == {"row_offsets": data.row_offsets.tolist(), "targets": data.targets.tolist(),
+                       "weights_m": data.weights_m.tolist()}
+    download_osm.write_json(metadata_dir / "download.json", {"status": "success", "graph_sha256": "wrong"})
+    with pytest.raises(ValueError, match="metadata"):
+        download_osm.download(tmp_path, "test/1.0", "https://example.test", "https://example.test/api")
+
+
+@pytest.mark.parametrize("error", [download_osm.ResponseStatusCodeError("'server' responded: 502 Bad Gateway"),
+                                  download_osm.requests.Timeout("read timed out"),
+                                  download_osm.requests.ConnectionError("connection closed")])
+def test_graph_download_retries_transient_failures(monkeypatch, error):
+    calls, delays = [], []
+    expected = make_hand_graph()
+    polygon = download_osm.validate_boundary(boundary_fixture())
+
+    def fetch(received_polygon, **options):
+        assert received_polygon.equals(polygon)
+        assert options == download_osm.GRAPH_OPTIONS
+        calls.append(options)
+        if len(calls) < 3:
+            raise error
+        return expected
+
+    monkeypatch.setattr(download_osm.ox, "graph_from_polygon", fetch)
+    monkeypatch.setattr(download_osm.time, "sleep", delays.append)
+    assert download_osm.fetch_graph(polygon, max_attempts=3) is expected
+    assert len(calls) == 3 and delays == [60, 120]
+
+
+@pytest.mark.parametrize("message,retries", [("'server' responded: 503 Service Unavailable", 3),
+                                            ("'server' responded: 403 Forbidden", 1),
+                                            ("'server' responded: 406 Not Acceptable", 1)])
+def test_graph_download_retry_limit_and_nontransient_errors(monkeypatch, message, retries):
+    calls, delays = [], []
+
+    def fail(*args, **kwargs):
+        calls.append(1)
+        raise download_osm.ResponseStatusCodeError(message)
+
+    monkeypatch.setattr(download_osm.ox, "graph_from_polygon", fail)
+    monkeypatch.setattr(download_osm.time, "sleep", delays.append)
+    with pytest.raises(download_osm.ResponseStatusCodeError):
+        download_osm.fetch_graph(None, max_attempts=3)
+    assert len(calls) == retries and len(delays) == retries - 1
+
+
 def test_validation_detects_wrong_results(tmp_path, executable):
     data = graph_to_csr(make_hand_graph())
     binary = write_csr(data, tmp_path)
@@ -354,8 +431,83 @@ def test_validation_detects_wrong_results(tmp_path, executable):
         check_sssp(data, rows, expected, 0)
 
 
+def test_local_extract_preserves_topology_and_uses_osmnx(tmp_path, executable, monkeypatch):
+    # Synthetic test records, separate from the downloaded regional data.
+    xml = tmp_path / "fixture.osm"
+    xml.write_text('''<osm version="0.6" generator="unit-test">
+      <node id="1" lat="63.0" lon="27.0"/>
+      <node id="2" lat="63.0" lon="27.001"><tag k="highway" v="traffic_signals"/></node>
+      <node id="3" lat="63.0" lon="27.002"/>
+      <node id="4" lat="63.0" lon="27.02"/>
+      <node id="11" lat="62.9995" lon="27.0005"/>
+      <node id="12" lat="63.0005" lon="27.0005"/>
+      <node id="21" lat="64.0" lon="28.0"/>
+      <node id="22" lat="64.001" lon="28.0"/>
+      <way id="101"><nd ref="1"/><nd ref="2"/><nd ref="3"/>
+        <tag k="highway" v="residential"/><tag k="oneway" v="yes"/></way>
+      <way id="102"><nd ref="1"/><nd ref="2"/>
+        <tag k="highway" v="residential"/><tag k="oneway" v="yes"/></way>
+      <way id="103"><nd ref="11"/><nd ref="12"/><tag k="highway" v="residential"/></way>
+      <way id="104"><nd ref="3"/><nd ref="4"/><tag k="highway" v="residential"/></way>
+      <way id="105"><nd ref="21"/><nd ref="22"/><tag k="highway" v="residential"/></way>
+      <way id="201"><nd ref="2"/><nd ref="12"/><tag k="highway" v="footway"/></way>
+      <way id="202"><nd ref="2"/><nd ref="12"/>
+        <tag k="highway" v="residential"/><tag k="access" v="private"/></way>
+      <way id="203"><nd ref="2"/><nd ref="12"/>
+        <tag k="highway" v="residential"/><tag k="motor_vehicle" v="no"/></way>
+      <way id="204"><nd ref="2"/><nd ref="12"/><tag k="highway" v="service"/></way>
+    </osm>''', encoding="utf-8")
+    pbf = tmp_path / "fixture.osm.pbf"
+    with osmium.SimpleWriter(pbf) as writer:
+        for entity in osmium.FileProcessor(xml):
+            writer.add(entity)
+    polygon = Polygon([(26.999, 62.999), (27.003, 62.999),
+                       (27.003, 63.001), (26.999, 63.001)])
+    original_supplier = ox._overpass._download_overpass_network
+    original_builder = ox.graph_from_polygon
+    calls = []
+
+    def builder(boundary, **options):
+        calls.append(options)
+        assert boundary.equals(polygon)
+        return original_builder(boundary, **options)
+
+    def unexpected_network(*args, **kwargs):
+        pytest.fail("A local OSM extract must not request roads from the network")
+
+    monkeypatch.setattr(ox, "graph_from_polygon", builder)
+    monkeypatch.setattr(download_osm.requests, "post", unexpected_network)
+    graph, metadata = extract_osm.graph_from_extract(pbf, polygon, tmp_path, download_osm.GRAPH_OPTIONS)
+    assert calls == [download_osm.GRAPH_OPTIONS]
+    assert ox._overpass._download_overpass_network is original_supplier
+    assert set(graph) == {1, 2, 3, 11, 12}
+    assert graph.number_of_edges() == 5
+    assert len(graph[1][2]) == 2 and not graph.has_edge(2, 1)
+    assert graph.has_edge(11, 12) and graph.has_edge(12, 11)
+    assert not nx.has_path(graph, 1, 11)
+    assert graph.nodes[2]["highway"] == "traffic_signals"
+    assert 45 < graph[1][2][0]["length"] < 55
+    assert metadata["selected_osm_ways"] == 4 and metadata["selected_osm_nodes"] == 6
+    assert metadata["type"] == "osm_extract"
+    assert metadata["sha256"] == download_osm.file_sha256(pbf)
+    validate_graph(graph, executable, tmp_path / "csr", list(range(5)), ("heap", "phased"), True)
+
+
+def test_local_extract_restores_supplier_on_failure(tmp_path, monkeypatch):
+    original = ox._overpass._download_overpass_network
+    invalid = tmp_path / "invalid.osm.pbf"
+    invalid.write_bytes(b"invalid PBF")
+    polygon = download_osm.validate_boundary(boundary_fixture())
+    with pytest.raises(RuntimeError):
+        extract_osm.graph_from_extract(invalid, polygon, tmp_path, download_osm.GRAPH_OPTIONS)
+    assert ox._overpass._download_overpass_network is original
+    monkeypatch.setattr(ox._overpass, "_get_network_filter", lambda _: '["highway"="residential"]')
+    with pytest.raises(ValueError, match="Unsupported"):
+        extract_osm.drive_filter()
+
+
 def test_real_osm_if_available(tmp_path, executable):
-    path = ROOT / "data/raw/pohjois_savo.graphml"
+    path = download_osm.resolve_graphml(ROOT / "data/raw/pohjois_savo.graphml")
     if not path.exists():
         pytest.skip("Real Pohjois-Savo GraphML not downloaded; synthetic tests are separate")
     metadata = json.loads((ROOT / "data/metadata/download.json").read_text())

@@ -1,0 +1,11 @@
+{
+  "provider": "Geofabrik",
+  "url": "https://download.geofabrik.de/europe/finland-latest.osm.pbf",
+  "checksum_url": "https://download.geofabrik.de/europe/finland-latest.osm.pbf.md5",
+  "md5": "521be31cf8e3c1c1d714e466d079dcdb",
+  "sha256": "50e7a58292847ea9e25d90723edc769341f628cfebbbc0f6b5ca64386824e680",
+  "bytes": 775535468,
+  "downloaded_at_utc": "2026-11-10T17:26:30.461304+00:00",
+  "attribution": "© OpenStreetMap contributors; https://www.openstreetmap.org/copyright",
+  "license": "ODbL-1.0"
+}

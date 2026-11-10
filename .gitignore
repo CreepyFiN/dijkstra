@@ -7,8 +7,12 @@ __pycache__/
 .DS_Store
 data/raw/*
 !data/raw/.gitkeep
+!data/raw/pohjois_savo.graphml.gz
 data/processed/*
 !data/processed/.gitkeep
+!data/processed/graph.csr
+!data/processed/graph_nodes.csv
+!data/processed/graph_edges.csv
 !data/processed/validation/
 data/metadata/cache/
 *.tmp

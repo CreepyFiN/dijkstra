@@ -15,6 +15,8 @@ import networkx as nx
 import numpy as np
 import osmnx as ox
 
+from download_osm import resolve_graphml
+
 ROOT = Path(__file__).resolve().parents[1]
 UINT32_MAX = (1 << 32) - 1
 UINT64_MAX = (1 << 64) - 1
@@ -164,7 +166,7 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, default=ROOT / "data/processed")
     args = parser.parse_args()
     try:
-        graph = ox.load_graphml(args.graphml)
+        graph = ox.load_graphml(resolve_graphml(args.graphml))
         data = graph_to_csr(graph)
         path = write_csr(data, args.output_dir)
         print(f"Saved {data.node_count} nodes and {data.edge_count} directed edges to {path}")
