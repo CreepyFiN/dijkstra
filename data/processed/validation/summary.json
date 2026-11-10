@@ -1,0 +1,8 @@
+{
+  "seed": 918898,
+  "synthetic_graphs": 13,
+  "cpp_runs": 652,
+  "reference_algorithm": "NetworkX single_source_bellman_ford_path_length",
+  "networkx_version": "3.5",
+  "real_osm_validated": false
+}

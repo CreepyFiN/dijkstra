@@ -1,0 +1,64 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd">
+  <key id="d3" for="edge" attr.name="length" attr.type="string" />
+  <key id="d2" for="node" attr.name="y" attr.type="string" />
+  <key id="d1" for="node" attr.name="x" attr.type="string" />
+  <key id="d0" for="graph" attr.name="crs" attr.type="string" />
+  <graph edgedefault="directed">
+    <node id="5000000000">
+      <data key="d1">26.661943298185935</data>
+      <data key="d2">62.32409886113313</data>
+    </node>
+    <node id="5000000111">
+      <data key="d1">26.10319623000563</data>
+      <data key="d2">62.29218434835318</data>
+    </node>
+    <node id="5000000037">
+      <data key="d1">26.98618798504631</data>
+      <data key="d2">62.13329158837246</data>
+    </node>
+    <node id="5000000148">
+      <data key="d1">26.24032293792348</data>
+      <data key="d2">62.96400217103375</data>
+    </node>
+    <node id="5000000185">
+      <data key="d1">26.3191178243501</data>
+      <data key="d2">62.364719475791006</data>
+    </node>
+    <node id="5000000074">
+      <data key="d1">26.670190983924368</data>
+      <data key="d2">62.809548256143756</data>
+    </node>
+    <edge source="5000000000" target="5000000074" id="0">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000000" target="5000000074" id="1">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000000" target="5000000074" id="2">
+      <data key="d3">12.635962030629244</data>
+    </edge>
+    <edge source="5000000000" target="5000000111" id="0">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000000" target="5000000111" id="1">
+      <data key="d3">94.12088334463404</data>
+    </edge>
+    <edge source="5000000000" target="5000000111" id="2">
+      <data key="d3">64.44308858152618</data>
+    </edge>
+    <edge source="5000000111" target="5000000000" id="0">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000111" target="5000000000" id="1">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000037" target="5000000185" id="0">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000148" target="5000000111" id="0">
+      <data key="d3">0.0</data>
+    </edge>
+    <data key="d0">epsg:4326</data>
+  </graph>
+</graphml>

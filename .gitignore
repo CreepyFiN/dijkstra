@@ -1,0 +1,14 @@
+.venv/
+build/
+build-*/
+__pycache__/
+.pytest_cache/
+*.pyc
+.DS_Store
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+!data/processed/validation/
+data/metadata/cache/
+*.tmp

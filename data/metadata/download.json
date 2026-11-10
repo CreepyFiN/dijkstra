@@ -1,0 +1,24 @@
+{
+  "region": "Pohjois-Savo, Finland",
+  "iso3166_2": "FI-15",
+  "started_at_utc": "2026-11-10T14:03:37.156245+00:00",
+  "status": "failed",
+  "attribution": "© OpenStreetMap contributors; https://www.openstreetmap.org/copyright",
+  "license": "ODbL-1.0",
+  "osmnx_version": "2.1.1",
+  "graph_options": {
+    "network_type": "drive",
+    "simplify": false,
+    "retain_all": true,
+    "truncate_by_edge": false
+  },
+  "weight": "OSMnx length, metres",
+  "user_agent": "pohjois-savo-dijkstra/1.0 (educational one-off OSM road-network download)",
+  "nominatim_url": "https://nominatim.openstreetmap.org",
+  "overpass_url": "https://overpass-api.de/api",
+  "boundary_osm_relation": 918898,
+  "boundary_display_name": "Pohjois-Savo, Manner-Suomi, Suomi",
+  "boundary_geometry_type": "Polygon",
+  "error": "ResponseStatusCodeError: 'overpass-api.de' responded: 502 Bad Gateway # 502 Gateway Timeout\n\nThis Overpass API server is currently at capacity. All query workers are busy\nand the request queue is full.\n\n## What to do\n\nRetry your request using exponential backoff: wait a short interval, then retry.\nIf the request fails again, double the wait time and retry again.\n\n## For heavy or automated use\n\nThis public endpoint is intended for browser-based and human-operated tools.\nFor automated or high-volume use, run a local Overpass API instance:\n\nhttps://github.com/b1tw153/Overpass-API/blob/main/README.md\n",
+  "failed_at_utc": "2026-11-10T14:04:37.794711+00:00"
+}

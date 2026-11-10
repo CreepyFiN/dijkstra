@@ -1,0 +1,305 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd">
+  <key id="d3" for="edge" attr.name="length" attr.type="string" />
+  <key id="d2" for="node" attr.name="y" attr.type="string" />
+  <key id="d1" for="node" attr.name="x" attr.type="string" />
+  <key id="d0" for="graph" attr.name="crs" attr.type="string" />
+  <graph edgedefault="directed">
+    <node id="5000000555">
+      <data key="d1">26.62084928062408</data>
+      <data key="d2">62.28804123865867</data>
+    </node>
+    <node id="5000000333">
+      <data key="d1">26.848360858466705</data>
+      <data key="d2">62.12123968285957</data>
+    </node>
+    <node id="5000000111">
+      <data key="d1">26.70539517937982</data>
+      <data key="d2">62.33879497516233</data>
+    </node>
+    <node id="5000000296">
+      <data key="d1">26.66901359314663</data>
+      <data key="d2">62.95104612808066</data>
+    </node>
+    <node id="5000000000">
+      <data key="d1">26.148758638852854</data>
+      <data key="d2">62.325524710312294</data>
+    </node>
+    <node id="5000000370">
+      <data key="d1">26.165380358818283</data>
+      <data key="d2">62.78277518367424</data>
+    </node>
+    <node id="5000000037">
+      <data key="d1">26.287019560993535</data>
+      <data key="d2">62.30753040379136</data>
+    </node>
+    <node id="5000000481">
+      <data key="d1">26.70258763941918</data>
+      <data key="d2">62.135703094269545</data>
+    </node>
+    <node id="5000000518">
+      <data key="d1">26.403873771049717</data>
+      <data key="d2">62.22472456533887</data>
+    </node>
+    <node id="5000000407">
+      <data key="d1">26.227468888863108</data>
+      <data key="d2">62.66974522790606</data>
+    </node>
+    <node id="5000000259">
+      <data key="d1">26.76010825548938</data>
+      <data key="d2">62.85891068060125</data>
+    </node>
+    <node id="5000000074">
+      <data key="d1">26.939734964904982</data>
+      <data key="d2">62.1807010569687</data>
+    </node>
+    <node id="5000000444">
+      <data key="d1">26.86430759724181</data>
+      <data key="d2">62.02499815938897</data>
+    </node>
+    <node id="5000000222">
+      <data key="d1">26.21056653227001</data>
+      <data key="d2">62.75574445963098</data>
+    </node>
+    <node id="5000000185">
+      <data key="d1">26.12701416298337</data>
+      <data key="d2">62.598616664695015</data>
+    </node>
+    <node id="5000000148">
+      <data key="d1">26.299463659400725</data>
+      <data key="d2">62.610677213013986</data>
+    </node>
+    <edge source="5000000555" target="5000000444" id="0">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000555" target="5000000444" id="1">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000555" target="5000000444" id="2">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000333" target="5000000111" id="0">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000333" target="5000000111" id="1">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000333" target="5000000333" id="0">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000333" target="5000000333" id="1">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000333" target="5000000444" id="0">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000296" target="5000000037" id="0">
+      <data key="d3">23.215713221712907</data>
+    </edge>
+    <edge source="5000000296" target="5000000037" id="1">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000296" target="5000000074" id="0">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000000" target="5000000185" id="0">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000370" target="5000000037" id="0">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000370" target="5000000296" id="0">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000370" target="5000000296" id="1">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000370" target="5000000296" id="2">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000370" target="5000000333" id="0">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000370" target="5000000333" id="1">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000370" target="5000000333" id="2">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000370" target="5000000444" id="0">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000037" target="5000000148" id="0">
+      <data key="d3">5.7511515140572955</data>
+    </edge>
+    <edge source="5000000481" target="5000000222" id="0">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000481" target="5000000222" id="1">
+      <data key="d3">35.24981318339415</data>
+    </edge>
+    <edge source="5000000481" target="5000000222" id="2">
+      <data key="d3">32.590043356936505</data>
+    </edge>
+    <edge source="5000000481" target="5000000259" id="0">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000481" target="5000000259" id="1">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000481" target="5000000444" id="0">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000481" target="5000000444" id="1">
+      <data key="d3">37.57211003239579</data>
+    </edge>
+    <edge source="5000000481" target="5000000444" id="2">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000481" target="5000000481" id="0">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000481" target="5000000481" id="1">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000518" target="5000000259" id="0">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000518" target="5000000259" id="1">
+      <data key="d3">56.77105955440746</data>
+    </edge>
+    <edge source="5000000518" target="5000000333" id="0">
+      <data key="d3">68.63474276908548</data>
+    </edge>
+    <edge source="5000000518" target="5000000333" id="1">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000518" target="5000000333" id="2">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000518" target="5000000481" id="0">
+      <data key="d3">30.67768107549591</data>
+    </edge>
+    <edge source="5000000518" target="5000000481" id="1">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000518" target="5000000555" id="0">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000518" target="5000000555" id="1">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000407" target="5000000111" id="0">
+      <data key="d3">59.12567392648486</data>
+    </edge>
+    <edge source="5000000407" target="5000000111" id="1">
+      <data key="d3">36.56488933641819</data>
+    </edge>
+    <edge source="5000000407" target="5000000148" id="0">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000407" target="5000000333" id="0">
+      <data key="d3">72.79754845842945</data>
+    </edge>
+    <edge source="5000000407" target="5000000370" id="0">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000407" target="5000000370" id="1">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000259" target="5000000148" id="0">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000259" target="5000000148" id="1">
+      <data key="d3">11.839627637966842</data>
+    </edge>
+    <edge source="5000000259" target="5000000222" id="0">
+      <data key="d3">96.49757660515642</data>
+    </edge>
+    <edge source="5000000259" target="5000000222" id="1">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000259" target="5000000444" id="0">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000259" target="5000000444" id="1">
+      <data key="d3">98.50430133114057</data>
+    </edge>
+    <edge source="5000000259" target="5000000444" id="2">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000074" target="5000000148" id="0">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000444" target="5000000222" id="0">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000444" target="5000000222" id="1">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000444" target="5000000222" id="2">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000222" target="5000000222" id="0">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000222" target="5000000222" id="1">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000222" target="5000000222" id="2">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000222" target="5000000333" id="0">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000222" target="5000000481" id="0">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000222" target="5000000518" id="0">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000185" target="5000000333" id="0">
+      <data key="d3">9.47318124465325</data>
+    </edge>
+    <edge source="5000000185" target="5000000333" id="1">
+      <data key="d3">78.67467202410126</data>
+    </edge>
+    <edge source="5000000185" target="5000000481" id="0">
+      <data key="d3">1.0</data>
+    </edge>
+    <edge source="5000000185" target="5000000481" id="1">
+      <data key="d3">74.45722579809919</data>
+    </edge>
+    <edge source="5000000185" target="5000000518" id="0">
+      <data key="d3">19.659221369793944</data>
+    </edge>
+    <edge source="5000000185" target="5000000518" id="1">
+      <data key="d3">92.54544726747073</data>
+    </edge>
+    <edge source="5000000185" target="5000000518" id="2">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000148" target="5000000407" id="0">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000148" target="5000000407" id="1">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000148" target="5000000444" id="0">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000148" target="5000000444" id="1">
+      <data key="d3">5.0</data>
+    </edge>
+    <edge source="5000000148" target="5000000444" id="2">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000148" target="5000000518" id="0">
+      <data key="d3">0.0</data>
+    </edge>
+    <edge source="5000000148" target="5000000518" id="1">
+      <data key="d3">0.0</data>
+    </edge>
+    <data key="d0">epsg:4326</data>
+  </graph>
+</graphml>
