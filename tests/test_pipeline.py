@@ -21,27 +21,51 @@ from shapely.geometry import Polygon, mapping
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 
-import download_osm
-import extract_osm
-from convert_to_csr import MAGIC, UINT32_MAX, UINT64_MAX, binary_size, graph_to_csr, write_csr
-from validate import (check_route, check_sssp, make_hand_graph, make_random_graph,
-                      reference_distances, run_cpp, validate_graph)
+from python import download_osm
+from python import extract_osm
+
+from python.convert_to_csr import (
+    MAGIC,
+    UINT32_MAX,
+    UINT64_MAX,
+    binary_size,
+    graph_to_csr,
+    write_csr
+)
+
+from python.validate import (
+    check_route,
+    check_sssp,
+    make_hand_graph,
+    make_random_graph,
+    reference_distances,
+    run_cpp,
+    validate_graph
+)
+
+
+def find_executable(variable: str, name: str) -> Path:
+    configured = os.environ.get(variable)
+    if configured:
+        candidates = [Path(configured)]
+    else:
+        filename = name + (".exe" if os.name == "nt" else "")
+        candidates = [ROOT / "build" / filename]
+        candidates += [ROOT / "build" / config / filename for config in ("Debug", "Release")]
+    for path in candidates:
+        if path.is_file():
+            return path
+    pytest.fail(f"Build {name} first or set {variable}; searched: {candidates}")
 
 
 @pytest.fixture(scope="session")
 def executable() -> Path:
-    path = Path(os.environ.get("PSV_EXECUTABLE", ROOT / "build/psv_dijkstra"))
-    if not path.is_file():
-        pytest.fail(f"Build the C++ executable first: {path}")
-    return path
+    return find_executable("PSV_EXECUTABLE", "psv_dijkstra")
 
 
 @pytest.fixture(scope="session")
 def probe() -> Path:
-    path = Path(os.environ.get("PSV_CSR_PROBE", ROOT / "build/test_csr"))
-    if not path.is_file():
-        pytest.fail(f"Build the C++ CSR test probe first: {path}")
-    return path
+    return find_executable("PSV_CSR_PROBE", "test_csr")
 
 
 def test_exact_binary_layout_and_mappings(tmp_path, probe):
@@ -490,7 +514,28 @@ def test_local_extract_preserves_topology_and_uses_osmnx(tmp_path, executable, m
     assert metadata["selected_osm_ways"] == 4 and metadata["selected_osm_nodes"] == 6
     assert metadata["type"] == "osm_extract"
     assert metadata["sha256"] == download_osm.file_sha256(pbf)
+    assert not list(tmp_path.glob("osm-locations-*"))
     validate_graph(graph, executable, tmp_path / "csr", list(range(5)), ("heap", "phased"), True)
+
+
+def test_local_extract_missing_location_preserves_error(tmp_path):
+    xml = tmp_path / "missing-node.osm"
+    xml.write_text('''<osm version="0.6" generator="unit-test">
+      <node id="1" lat="63.0" lon="27.0"/>
+      <way id="101"><nd ref="1"/><nd ref="2"/>
+        <tag k="highway" v="residential"/></way>
+    </osm>''', encoding="utf-8")
+    pbf = tmp_path / "missing-node.osm.pbf"
+    with osmium.SimpleWriter(pbf) as writer:
+        for entity in osmium.FileProcessor(xml):
+            writer.add(entity)
+    polygon = Polygon([(26.999, 62.999), (27.003, 62.999),
+                       (27.003, 63.001), (26.999, 63.001)])
+    original = ox._overpass._download_overpass_network
+    with pytest.raises(ValueError, match="lacks location for node 2 of way 101"):
+        extract_osm.graph_from_extract(pbf, polygon, tmp_path, download_osm.GRAPH_OPTIONS)
+    assert ox._overpass._download_overpass_network is original
+    assert not list(tmp_path.glob("osm-locations-*"))
 
 
 def test_local_extract_restores_supplier_on_failure(tmp_path, monkeypatch):

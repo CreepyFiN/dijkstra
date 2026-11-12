@@ -37,19 +37,39 @@ if(BUILD_TESTING)
     add_test(NAME csr_reader COMMAND test_csr)
     set_tests_properties(csr_reader PROPERTIES LABELS "cpp")
 
+
     # Python is optional for the standalone C++ build and runtime.
-    if(NOT Python3_EXECUTABLE AND EXISTS "${CMAKE_SOURCE_DIR}/.venv/bin/python")
-        set(Python3_EXECUTABLE "${CMAKE_SOURCE_DIR}/.venv/bin/python")
+
+    # Locate the project's virtual environment on Windows or Unix.
+    if(NOT Python3_EXECUTABLE)
+        if(WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/.venv/Scripts/python.exe")
+            set(Python3_EXECUTABLE "${CMAKE_SOURCE_DIR}/.venv/Scripts/python.exe")
+        elseif(EXISTS "${CMAKE_SOURCE_DIR}/.venv/bin/python")
+            set(Python3_EXECUTABLE "${CMAKE_SOURCE_DIR}/.venv/bin/python")
+        endif()
     endif()
+
     find_package(Python3 3.11 COMPONENTS Interpreter QUIET)
+
     if(Python3_Interpreter_FOUND)
-        add_test(NAME python_pipeline
+        add_test(
+            NAME python_pipeline
             COMMAND "${CMAKE_COMMAND}" -E env
+                "PYTHONPATH=${CMAKE_SOURCE_DIR}"
                 "PSV_EXECUTABLE=$<TARGET_FILE:psv_dijkstra>"
                 "PSV_CSR_PROBE=$<TARGET_FILE:test_csr>"
-                "${Python3_EXECUTABLE}" -m pytest -q "${CMAKE_SOURCE_DIR}/tests/test_pipeline.py")
-        set_tests_properties(python_pipeline PROPERTIES LABELS "python;integration")
+                "${Python3_EXECUTABLE}" -m pytest -v --durations=5
+                "${CMAKE_SOURCE_DIR}/tests/test_pipeline.py"
+        )
+
+        set_tests_properties(python_pipeline PROPERTIES
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            LABELS "python;integration"
+            TIMEOUT 600
+        )
     else()
-        message(STATUS "Python >= 3.11 not found: Python integration tests are not registered")
+        message(STATUS
+            "Python >= 3.11 not found: Python integration tests are not registered"
+        )
     endif()
 endif()
