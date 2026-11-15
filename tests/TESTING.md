@@ -12,6 +12,7 @@ your configured build directory when appropriate.
 - [Runtime behavior](#run)
 - [Tests](#tests)
 - [Benchmarks and timing definitions](#benchmark)
+- [Regional benchmark results](#regional-benchmark-results-2026-11-15)
 - [Early stopping and partial results](#target-only--early-stop-benchmarking)
 - [Delta-stepping and bucket tuning](#delta-stepping)
 - [Automatic bucket defaults](#automatic-bucket-defaults)
@@ -69,7 +70,7 @@ Examples below use the Windows CUDA-enabled Release build:
 .\build-cuda\Release\psv_dijkstra.exe --backends
 .\build-cuda\Release\psv_dijkstra.exe --graph data/processed/graph.csr --source 0 --target 1 --algorithm cuda
 .\build-cuda\Release\psv_dijkstra.exe --graph data/processed/graph.csr --source 0 --target 1 --algorithm cpu-parallel
-.\build-cuda\Release\psv_dijkstra.exe --graph data/processed/graph.csr --source 0 --target 1 --algorithm auto
+.\build-cuda\Release\psv_dijkstra.exe --graph data/processed/graph.csr --source 0 --target 1 --algorithm heap
 ```
 
 Source and target are **internal node indices**, mapped to OSM IDs and
@@ -82,13 +83,11 @@ Set OpenMP worker count through its standard environment variable:
 $env:OMP_NUM_THREADS = "4"
 ```
 
-JSON reports both `requested_algorithm` and the actual `algorithm`, plus a
-`fallback_reason`. Explicit `cuda` or `cpu-parallel` requests fail clearly if
-unavailable. Auto falls back on availability or GPU-memory allocation failures;
-it does not conceal arithmetic overflow or calculation/kernel errors.
+Heap is the default when `--algorithm` is omitted. JSON reports both
+`requested_algorithm` and `algorithm`. Explicit backend requests fail clearly
+if unavailable; there is no automatic selection or fallback.
 
-**Auto chooses by availability, not measured speed.** Classic Dijkstra backends settle
-one global minimum node at a time. OpenMP keeps per-worker priority queues,
+Classic Dijkstra backends settle one global minimum node at a time. OpenMP keeps per-worker priority queues,
 avoiding full-node scans. CUDA caches minima for 256-node tiles and recomputes
 only changed tiles. It runs up to 1024 ordered rounds per kernel launch before
 copying a control result to the host, and uses warp shuffles for reductions.
@@ -111,10 +110,10 @@ ctest --test-dir build-cuda -C Debug --output-on-failure -V
 ```
 
 CTest includes the serial algorithms, parallel backend tests, CSR reader, and
-Python integration. Backend tests also check explicit unavailability and Auto
-fallback. They exercise parallel edges, unsorted rows, deterministic ties,
+Python integration. Backend tests also check explicit unavailability and default
+heap selection. They exercise parallel edges, unsorted rows, deterministic ties,
 zero-weight cycles, disconnected nodes, multiple CUDA blocks, and overflow.
-CPU-only configurations exercise fallback without requiring a GPU.
+CPU-only configurations check unavailable backends without requiring a GPU.
 
 The full-region Python reference test can take several minutes. For a quicker
 run against a particular executable:
@@ -193,6 +192,55 @@ allocation, and GPU setup/transfers, so early stopping mainly reduces search
 work; it does not remove those costs. Results are endpoint-dependent: selecting
 the source itself is trivial and a farthest target can require nearly full SSSP.
 
+### Regional benchmark results (2026-11-15)
+
+User-provided benchmark output from the CUDA-enabled Windows Release build,
+using an NVIDIA GeForce RTX 3070 and four OpenMP workers. Both runs loaded
+`data/processed/graph.csr`: **448,192 nodes and 896,165 directed edges**.
+Each algorithm ran three times in separate processes, with a **300-second
+per-trial timeout** and no explicit bucket override.
+
+The first run used early stopping from internal node **0 to 1**. The second
+computed **full SSSP from node 0**, with node 448191 selected for route output;
+that target does not limit the full search. Times below are median
+`algorithm_ms`, in milliseconds, including setup and GPU transfers but excluding
+disk I/O and route reconstruction. Rows are ordered by full-search time.
+
+| Algorithm | Early stop (ms) | Full SSSP (ms) | Early-stop finalized nodes |
+| --- | ---: | ---: | ---: |
+| `heap` | 2.7571 | 32.2947 | 15 |
+| `delta-cpu` | 3.3380 | 107.9911 | 16 |
+| `delta-cuda` | 103.9501 | 295.0090 | 1,310 |
+| `cpu-parallel` | 3.0676 | 520.3173 | 15 |
+| `cuda` | 89.6741 | 2829.6450 | 15 |
+| `phased` | 6.1223 | 109800.1630 | 15 |
+
+All full searches completed and finalized **440,079 reachable nodes**; the
+remaining 8,113 nodes were unreachable from source 0. All early-stop searches
+reported partial results. Default bucket widths were 300 m / 1000 m for
+`delta-cpu` and 10000 m / 1000000 m for `delta-cuda` (early stop / full).
+Delta-stepping finalizes a whole bucket, explaining its larger early-stop
+node counts.
+
+**All six algorithms passed shortest-path validation in both modes.** Full
+classic Dijkstra outputs matched heap exactly. Delta-stepping outputs passed
+distance and predecessor-forest checks; `exact_sssp_match: false` means exact
+CSV equality was not required. Early-stop results were checked against an
+untimed full heap reference, including every finalized node.
+
+Heap was fastest in both runs. For full SSSP, delta CPU was the fastest parallel
+option, followed by delta CUDA, OpenMP Dijkstra, CUDA Dijkstra, and serial
+phased Dijkstra. The early-stop ranking was heap, OpenMP Dijkstra, delta CPU,
+phased, CUDA, then delta CUDA. These measurements cover one source and one
+short early-stop route; other endpoints and hardware can change the ranking.
+
+Reproduce with separate output files to retain both reports:
+
+```powershell
+.\.venv\Scripts\python.exe python/benchmark.py --executable build-cuda/Release/psv_dijkstra.exe --graph data/processed/graph.csr --algorithms heap phased cpu-parallel cuda delta-cpu delta-cuda --source 0 --target 1 --early-stop --threads 4 --repeats 3 --timeout 300 --output build-cuda/benchmark-early-comparison.json
+.\.venv\Scripts\python.exe python/benchmark.py --executable build-cuda/Release/psv_dijkstra.exe --graph data/processed/graph.csr --algorithms heap phased cpu-parallel cuda delta-cpu delta-cuda --source 0 --target 448191 --threads 4 --repeats 3 --timeout 300 --output build-cuda/benchmark-full-comparison.json
+```
+
 ### Local optimization results
 
 On the RTX 3070/MSVC Release setup, regional source 0 produced these indicative
@@ -239,8 +287,8 @@ device snapshots, scans, host-control gaps and synchronization, not just kernels
 Delta must be finite and positive. Extreme bucket indices saturate rather than
 overflowing an integer conversion. Negative/nonfinite weights and distance-sum
 overflow retain the existing error behavior. `--backends` reports delta support;
-explicit CUDA delta requests fail if unavailable. Auto retains its existing
-Dijkstra-only policy. Bucket width changes performance and must be benchmarked;
+explicit CUDA delta requests fail if unavailable. Bucket width changes performance
+and must be benchmarked;
 larger is not uniformly better. Tests include shared destinations, zero cycles,
 disconnected graphs, overflow, multiple widths, and Bellman-Ford comparisons.
 

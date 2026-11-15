@@ -27,35 +27,7 @@ Execution run_dijkstra(CsrView graph, std::uint32_t source, const std::string& a
     else if (algorithm == "cuda") execution.result = dijkstra_cuda_timed(graph, source, execution.cuda_timings, target);
     else if (algorithm == "delta-cpu") execution.result = delta_cpu(graph, source, delta, target);
     else if (algorithm == "delta-cuda") execution.result = delta_cuda(graph, source, delta, execution.cuda_timings, target);
-    else if (algorithm == "auto") {
-        // Validate before selecting a backend so invalid inputs are never
-        // mistaken for GPU availability problems.
-        validate_csr(graph);
-        if (source >= graph.node_count || source == invalid_node) {
-            throw std::out_of_range("Dijkstra source index is out of range");
-        }
-        const auto gpu = cuda_status(cuda_required_bytes(graph));
-        execution.fallback_reason = gpu.reason;
-        if (gpu.available) {
-            try {
-                execution.result = dijkstra_cuda_timed(graph, source, execution.cuda_timings, target);
-                execution.algorithm = "cuda";
-                execution.fallback_reason.clear();
-                return execution;
-            } catch (const BackendUnavailable& error) {
-                execution.fallback_reason = error.what();
-            }
-        }
-        const auto cpu = openmp_status();
-        if (cpu.available) {
-            execution.algorithm = "cpu-parallel";
-            execution.result = dijkstra_parallel_target(graph, source, target);
-        } else {
-            execution.fallback_reason += "; " + cpu.reason;
-            execution.algorithm = "heap";
-            execution.result = dijkstra_heap_target(graph, source, target);
-        }
-    } else throw std::invalid_argument("Unknown Dijkstra algorithm: " + algorithm);
+    else throw std::invalid_argument("Unknown Dijkstra algorithm: " + algorithm);
     return execution;
 }
 

@@ -171,17 +171,12 @@ void run_backend_tests() {
             std::cout << "Unavailable backend checked: " << item.second.reason << '\n';
         }
     }
-    const auto automatic = psv::run_dijkstra(graph.view(), 0, "auto");
-    CHECK(automatic.algorithm == (gpu.available ? "cuda" : cpu.available ? "cpu-parallel" : "heap"));
-    CHECK(automatic.result.distances == std::vector<double>({0, 2, 5}));
-    CHECK(automatic.fallback_reason.empty() == gpu.available);
-    expect_throw<std::out_of_range>([&] { psv::run_dijkstra(graph.view(), 9, "auto"); });
+    const auto default_run = psv::run_dijkstra(graph.view(), 0);
+    CHECK(default_run.algorithm == "heap");
+    CHECK(default_run.result.distances == std::vector<double>({0, 2, 5}));
+    expect_throw<std::invalid_argument>([&] { psv::run_dijkstra(graph.view(), 0, "auto"); });
+    expect_throw<std::out_of_range>([&] { psv::run_dijkstra(graph.view(), 9); });
     expect_throw<std::invalid_argument>([&] { psv::run_dijkstra(graph.view(), 0, "unknown"); });
-    const auto bad = make_graph(3, {{1, 2, -1}});
-    expect_throw<std::invalid_argument>([&] { psv::run_dijkstra(bad.view(), 0, "auto"); });
-    const auto maximum = std::numeric_limits<double>::max();
-    const auto overflow = make_graph(3, {{0, 1, maximum}, {1, 2, maximum}});
-    expect_throw<std::overflow_error>([&] { psv::run_dijkstra(overflow.view(), 0, "auto"); });
     CHECK(!psv::cuda_status(std::numeric_limits<std::uint64_t>::max()).available);
 }
 
@@ -228,7 +223,7 @@ void run_early_tests() {
     std::vector<std::tuple<std::uint32_t,std::uint32_t,double>> edges;
     for (std::uint32_t node=0; node<2050; ++node) edges.emplace_back(node,node+1,1.0);
     const auto graph=make_graph(2053,edges);
-    for (const std::string backend : {"heap","phased","cpu-parallel","cuda","auto","delta-cpu","delta-cuda"}) {
+    for (const std::string backend : {"heap","phased","cpu-parallel","cuda","delta-cpu","delta-cuda"}) {
         if ((backend=="cuda" || backend=="delta-cuda") && !psv::cuda_status().available) continue;
         if (backend=="cpu-parallel" && !psv::openmp_status().available) continue;
         for (const auto target : {0U,1U,1023U,1024U,2049U,2052U}) {

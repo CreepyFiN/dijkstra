@@ -30,7 +30,7 @@ struct Options {
 
 void usage() {
     std::cout << "Usage: psv_dijkstra --graph FILE --source INDEX --target INDEX\n"
-                 "                    [--algorithm heap|phased|cpu-parallel|cuda|auto|delta-cpu|delta-cuda] [--delta METRES]\n"
+                 "                    [--algorithm heap|phased|cpu-parallel|cuda|delta-cpu|delta-cuda] [--delta METRES]\n"
                  "                    [--distances FILE.csv] [--early-stop]\n"
                  "       psv_dijkstra --backends\n";
 }
@@ -90,8 +90,8 @@ Options parse_options(int argc, char** argv) {
         throw std::invalid_argument("--graph, --source and --target are required");
     }
     if (options.algorithm != "heap" && options.algorithm != "phased" && options.algorithm != "cuda"
-        && options.algorithm != "cpu-parallel" && options.algorithm != "auto" && options.algorithm != "delta-cpu" && options.algorithm != "delta-cuda") {
-        throw std::invalid_argument("Algorithm must be heap, phased, cpu-parallel, cuda, auto, delta-cpu or delta-cuda");
+        && options.algorithm != "cpu-parallel" && options.algorithm != "delta-cpu" && options.algorithm != "delta-cuda") {
+        throw std::invalid_argument("Algorithm must be heap, phased, cpu-parallel, cuda, delta-cpu or delta-cuda");
     }
     if (!options.distances.empty()) {
         const auto input = std::filesystem::weakly_canonical(options.graph);
@@ -154,7 +154,7 @@ int main(int argc, char** argv) {
             std::cout << ",\"delta-cpu\":";
             print_backend({true, "", psv::openmp_status().available ? "OpenMP" : "serial CPU"});
             std::cout << ",\"max_cpu_threads\":" << psv::parallel_cpu_threads()
-                      << ",\"auto_policy\":\"cuda > cpu-parallel > heap\"}\n";
+                      << "}\n";
             return 0;
         }
         const auto options = parse_options(argc, argv);
@@ -188,9 +188,7 @@ int main(int argc, char** argv) {
         print_array(path.nodes);
         std::cout << ",\n  \"path_edges\": ";
         print_array(path.edges);
-        std::cout << ",\n  \"algorithm_ms\": " << time_ms
-                  << ",\n  \"fallback_reason\": ";
-        print_string(execution.fallback_reason);
+        std::cout << ",\n  \"algorithm_ms\": " << time_ms;
         std::cout << ",\n  \"early_stop\": " << (options.early_stop ? "true" : "false")
                   << ",\n  \"search_complete\": " << (result.complete ? "true" : "false")
                   << ",\n  \"settled_nodes\": " << std::count(result.settled.begin(), result.settled.end(), std::uint8_t{1});

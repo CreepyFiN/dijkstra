@@ -39,17 +39,17 @@ Windows Release examples, from the repository root:
 
 Source and target are **internal node indices**, mapped to OSM IDs and
 coordinates in `data/processed/graph_nodes.csv`. Results are printed as JSON.
+Omitting `--algorithm` selects `heap`; other backends require an explicit flag.
 Python is not needed to run the executable with an existing CSR graph.
 
 | `--algorithm` | Backend | Notes |
 | --- | --- | --- |
 | `heap` | Serial CPU heap Dijkstra | default and fastest tested baseline |
-| `phased` | Serial CPU scan-based Dijkstra | --- |
-| `cpu-parallel` | OpenMP Dijkstra with worker-owned heaps | --- |
-| `cuda` | CUDA Dijkstra with cached minima and batched execution | --- |
+| `phased` | Serial CPU scan-based Dijkstra | reference implementation; slow on large graphs |
+| `cpu-parallel` | OpenMP Dijkstra with worker-owned heaps | synchronized minimum selection; slower than heap in regional tests |
+| `cuda` | CUDA Dijkstra with cached minima and batched execution | requires CUDA; slower than heap in regional tests |
 | `delta-cpu` | CPU delta-stepping | using OpenMP when available |
-| `delta-cuda` | CUDA delta-stepping | --- |
-| `auto` | CUDA > OpenMP Dijkstra > heap | based on availability, not speed |
+| `delta-cuda` | CUDA delta-stepping | requires CUDA; faster than classic CUDA for full regional runs |
 
 Useful options:
 
@@ -84,3 +84,6 @@ The full regional reference test can take several minutes.
 See **[tests/TESTING.md](tests/TESTING.md)** for environment setup, quick test
 commands, benchmark flags, timing definitions, implementation details, bucket
 sweeps, and recorded performance results.
+
+See the **[regional benchmark results](tests/TESTING.md#regional-benchmark-results-2026-11-15)**
+for all six algorithms, comparing early stopping and full-source calculations.

@@ -116,7 +116,7 @@ def main() -> int:
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--algorithms", nargs="+", default=["heap", "phased", "cpu-parallel", "cuda"],
-                        choices=["heap", "phased", "cpu-parallel", "cuda", "auto", "delta-cpu", "delta-cuda"])
+                        choices=["heap", "phased", "cpu-parallel", "cuda", "delta-cpu", "delta-cuda"])
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if min(args.nodes, args.repeats, args.threads, args.timeout) <= 0 or not math.isfinite(args.timeout) or (args.delta is not None and (not math.isfinite(args.delta) or args.delta <= 0)):

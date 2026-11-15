@@ -13,8 +13,7 @@ struct BackendStatus {
     std::string device;
 };
 
-// Only availability/allocation failures permit automatic fallback. Calculation
-// errors (including overflow and failed kernels) must remain visible.
+// Reports an unavailable backend or insufficient device memory.
 class BackendUnavailable : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
@@ -45,12 +44,10 @@ void delta_predecessors(CsrView graph, std::uint32_t source, DijkstraResult& res
 struct Execution {
     DijkstraResult result;
     std::string algorithm;
-    std::string fallback_reason;
     CudaTimings cuda_timings;
 };
 
-// auto prefers CUDA, then OpenMP, then heap; this is an availability policy,
-// not a prediction of performance. Explicit backend requests never fall back.
-Execution run_dijkstra(CsrView graph, std::uint32_t source, const std::string& algorithm, double delta = 100, std::uint32_t target = invalid_node);
+// Explicit backend requests never fall back. Heap is the default.
+Execution run_dijkstra(CsrView graph, std::uint32_t source, const std::string& algorithm = "heap", double delta = 100, std::uint32_t target = invalid_node);
 
 }  // namespace psv

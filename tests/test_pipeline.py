@@ -68,7 +68,22 @@ def probe() -> Path:
     return find_executable("PSV_CSR_PROBE", "test_csr")
 
 
-@pytest.mark.parametrize("algorithm", ["cpu-parallel", "cuda", "auto"])
+def test_default_heap_and_removed_auto(tmp_path, executable):
+    binary = write_csr(graph_to_csr(make_random_graph(3)), tmp_path)
+    command = [str(executable), "--graph", str(binary), "--source", "0", "--target", "1"]
+    default = json.loads(subprocess.check_output(command, text=True))
+    explicit = json.loads(subprocess.check_output(command + ["--algorithm", "heap"], text=True))
+    assert default["algorithm"] == default["requested_algorithm"] == "heap"
+    for field in ("length_m", "path_nodes", "path_edges", "settled_nodes"):
+        assert default[field] == explicit[field]
+    rejected = subprocess.run(command + ["--algorithm", "auto"], capture_output=True, text=True)
+    assert rejected.returncode != 0
+    assert "Algorithm must be" in rejected.stderr
+    backends = json.loads(subprocess.check_output([str(executable), "--backends"], text=True))
+    assert "auto_policy" not in backends
+
+
+@pytest.mark.parametrize("algorithm", ["cpu-parallel", "cuda"])
 def test_parallel_backends(tmp_path, executable, monkeypatch, algorithm):
     monkeypatch.setenv("OMP_NUM_THREADS", "4")
     monkeypatch.setenv("OMP_DYNAMIC", "FALSE")
@@ -76,27 +91,22 @@ def test_parallel_backends(tmp_path, executable, monkeypatch, algorithm):
     graph = make_random_graph(3)
     data = graph_to_csr(graph)
     binary = write_csr(data, tmp_path)
-    if algorithm != "auto" and not backends[algorithm]["available"]:
+    if not backends[algorithm]["available"]:
         failed = subprocess.run([str(executable), "--graph", str(binary), "--source", "0",
                                  "--target", "1", "--algorithm", algorithm], capture_output=True, text=True)
         assert failed.returncode != 0
         assert backends[algorithm]["reason"] in failed.stderr
         return
-    selected = algorithm
-    if algorithm == "auto":
-        selected = "cuda" if backends["cuda"]["available"] else (
-            "cpu-parallel" if backends["cpu-parallel"]["available"] else "heap")
     for source in (0, len(graph) // 2, len(graph) - 1):
         expected = reference_distances(graph, data, source)
         for target in (source, len(graph) - 1):
             report, rows = run_cpp(executable, binary, source, target, algorithm, tmp_path / "distances.csv")
             assert report["requested_algorithm"] == algorithm
-            assert report["algorithm"] == selected
-            assert bool(report["fallback_reason"]) == (algorithm == "auto" and selected != "cuda")
+            assert report["algorithm"] == algorithm
             check_sssp(data, rows, expected, source)
             check_route(data, report, expected, source, target)
             for field in ("gpu_compute_ms", "gpu_upload_ms", "gpu_download_ms"):
-                assert report[field] >= 0 if selected == "cuda" else report[field] is None
+                assert report[field] >= 0 if algorithm == "cuda" else report[field] is None
 
 
 @pytest.mark.parametrize("algorithm", ["delta-cpu", "delta-cuda"])
@@ -121,7 +131,7 @@ def test_delta_pipeline(tmp_path, executable, monkeypatch, algorithm, delta):
             check_route(data, json.loads(result.stdout), expected, source, len(graph)-1)
 
 
-@pytest.mark.parametrize("algorithm", ["heap", "phased", "cpu-parallel", "cuda", "auto", "delta-cpu", "delta-cuda"])
+@pytest.mark.parametrize("algorithm", ["heap", "phased", "cpu-parallel", "cuda", "delta-cpu", "delta-cuda"])
 def test_early_stop(tmp_path, executable, monkeypatch, algorithm):
     monkeypatch.setenv("OMP_NUM_THREADS", "4")
     backends = json.loads(subprocess.check_output([str(executable), "--backends"], text=True))
