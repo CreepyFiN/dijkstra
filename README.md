@@ -41,15 +41,15 @@ Source and target are **internal node indices**, mapped to OSM IDs and
 coordinates in `data/processed/graph_nodes.csv`. Results are printed as JSON.
 Python is not needed to run the executable with an existing CSR graph.
 
-| `--algorithm` | Backend |
-| --- | --- |
-| `heap` | Serial CPU heap Dijkstra; default and fastest tested baseline |
-| `phased` | Serial CPU scan-based Dijkstra |
-| `cpu-parallel` | OpenMP Dijkstra with worker-owned heaps |
-| `cuda` | CUDA Dijkstra with cached minima and batched execution |
-| `delta-cpu` | CPU delta-stepping, using OpenMP when available |
-| `delta-cuda` | CUDA delta-stepping |
-| `auto` | CUDA ? OpenMP Dijkstra ? heap, based on availability, not speed |
+| `--algorithm` | Backend | Notes |
+| --- | --- | --- |
+| `heap` | Serial CPU heap Dijkstra | default and fastest tested baseline |
+| `phased` | Serial CPU scan-based Dijkstra | --- |
+| `cpu-parallel` | OpenMP Dijkstra with worker-owned heaps | --- |
+| `cuda` | CUDA Dijkstra with cached minima and batched execution | --- |
+| `delta-cpu` | CPU delta-stepping | using OpenMP when available |
+| `delta-cuda` | CUDA delta-stepping | --- |
+| `auto` | CUDA > OpenMP Dijkstra > heap | based on availability, not speed |
 
 Useful options:
 
