@@ -59,6 +59,8 @@ Path reconstruct_path(CsrView graph, const DijkstraResult& result,
         || result.predecessor_edge[source] != invalid_edge || result.settled[source] != 1) {
         throw std::invalid_argument("Path result has an invalid source state");
     }
+    if (!result.complete && !result.settled[target])
+        throw std::invalid_argument("Target is not finalized in this partial result");
     Path path;
     if (result.distances[target] == std::numeric_limits<double>::infinity()) {
         if (result.predecessor_node[target] != invalid_node
