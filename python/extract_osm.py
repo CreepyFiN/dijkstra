@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import re
-import tempfile
 
 import osmium
 import osmnx as ox
@@ -38,36 +37,40 @@ def extract_records(path: Path, polygon, work_dir: Path, metadata: dict):
     required_nodes = set()
     west, south, east, north = polygon.bounds
     work_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="osm-locations-", dir=work_dir) as temporary:
-        # Store country-wide node locations on disk, not in Python objects.
-        processor = (osmium.FileProcessor(path)
-                     .with_locations(f"sparse_file_array,{temporary}/locations")
-                     .with_filter(osmium.filter.EntityFilter(osmium.osm.WAY))
-                     .with_filter(osmium.filter.KeyFilter("highway")))
-        metadata["osm_snapshot_utc"] = processor.header.get("osmosis_replication_timestamp")
-        print("Reading original road ways from the OSM extract...", flush=True)
-        for way in processor:
-            tags = dict(way.tags)
-            if not accepts(tags):
-                continue
-            refs, longitude, latitude = [], [], []
-            for node in way.nodes:
-                if not node.location.valid():
-                    raise ValueError(f"OSM extract lacks location for node {node.ref} of way {way.id}")
-                refs.append(node.ref)
-                longitude.append(node.lon)
-                latitude.append(node.lat)
-            candidates = [(x, y) for x, y in zip(longitude, latitude)
-                          if west <= x <= east and south <= y <= north]
-            if not candidates:
-                continue
-            xs, ys = zip(*candidates)
-            if not intersects_xy(polygon, xs, ys).any():
-                continue
-            ways.append({"type": "way", "id": way.id, "nodes": refs, "tags": tags})
-            required_nodes.update(refs)
-        # Release the location cache before deleting its backing file (also on Windows).
-        del processor
+
+    # Validate the PBF header before creating the disk-backed location cache.
+    with osmium.io.Reader(str(path), osmium.osm.NOTHING) as reader:
+        metadata["osm_snapshot_utc"] = reader.header().get("osmosis_replication_timestamp")
+
+    # Omitting a filename lets libosmium manage its own temporary disk index.
+    # A named sparse_file_array retains an open file descriptor even after the
+    # processor is deleted, preventing TemporaryDirectory cleanup on Windows.
+    processor = (osmium.FileProcessor(path)
+                 .with_locations("sparse_file_array")
+                 .with_filter(osmium.filter.EntityFilter(osmium.osm.WAY))
+                 .with_filter(osmium.filter.KeyFilter("highway")))
+    print("Reading original road ways from the OSM extract...", flush=True)
+    for way in processor:
+        tags = dict(way.tags)
+        if not accepts(tags):
+            continue
+        refs, longitude, latitude = [], [], []
+        for node in way.nodes:
+            if not node.location.valid():
+                raise ValueError(f"OSM extract lacks location for node {node.ref} of way {way.id}")
+            refs.append(node.ref)
+            longitude.append(node.lon)
+            latitude.append(node.lat)
+        candidates = [(x, y) for x, y in zip(longitude, latitude)
+                      if west <= x <= east and south <= y <= north]
+        if not candidates:
+            continue
+        xs, ys = zip(*candidates)
+        if not intersects_xy(polygon, xs, ys).any():
+            continue
+        ways.append({"type": "way", "id": way.id, "nodes": refs, "tags": tags})
+        required_nodes.update(refs)
+    del processor
 
     print(f"Reading {len(required_nodes)} original nodes for {len(ways)} selected ways...", flush=True)
     nodes = []

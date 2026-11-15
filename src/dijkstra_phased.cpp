@@ -1,4 +1,5 @@
 #include "dijkstra.hpp"
+#include <stdexcept>
 
 namespace psv {
 namespace {
@@ -25,13 +26,19 @@ void relax_outgoing_edges(CsrView graph, DijkstraResult& result, std::uint32_t n
 }  // namespace
 
 DijkstraResult dijkstra_phased_cpu(CsrView graph, std::uint32_t source) {
+    return dijkstra_phased_target(graph, source, invalid_node);
+}
+
+DijkstraResult dijkstra_phased_target(CsrView graph, std::uint32_t source, std::uint32_t target) {
     auto result = detail::initialize_result(graph, source);
+    if (target != invalid_node && target >= graph.node_count) throw std::out_of_range("Target index out of range");
     while (true) {
         const auto node = select_minimum(result);
         if (node == invalid_node) {
             break;
         }
         result.settled[node] = 1;
+        if (node == target) { result.complete = false; break; }
         relax_outgoing_edges(graph, result, node);
     }
     return result;

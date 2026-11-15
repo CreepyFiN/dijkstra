@@ -21,27 +21,167 @@ from shapely.geometry import Polygon, mapping
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 
-import download_osm
-import extract_osm
-from convert_to_csr import MAGIC, UINT32_MAX, UINT64_MAX, binary_size, graph_to_csr, write_csr
-from validate import (check_route, check_sssp, make_hand_graph, make_random_graph,
-                      reference_distances, run_cpp, validate_graph)
+from python import download_osm
+from python import extract_osm
+
+from python.convert_to_csr import (
+    MAGIC,
+    UINT32_MAX,
+    UINT64_MAX,
+    binary_size,
+    graph_to_csr,
+    write_csr
+)
+
+from python.validate import (
+    check_route,
+    check_sssp,
+    make_hand_graph,
+    make_random_graph,
+    reference_distances,
+    run_cpp,
+    validate_graph
+)
+
+
+def find_executable(variable: str, name: str) -> Path:
+    configured = os.environ.get(variable)
+    if configured:
+        candidates = [Path(configured)]
+    else:
+        filename = name + (".exe" if os.name == "nt" else "")
+        candidates = [ROOT / "build" / filename]
+        candidates += [ROOT / "build" / config / filename for config in ("Debug", "Release")]
+    for path in candidates:
+        if path.is_file():
+            return path
+    pytest.fail(f"Build {name} first or set {variable}; searched: {candidates}")
 
 
 @pytest.fixture(scope="session")
 def executable() -> Path:
-    path = Path(os.environ.get("PSV_EXECUTABLE", ROOT / "build/psv_dijkstra"))
-    if not path.is_file():
-        pytest.fail(f"Build the C++ executable first: {path}")
-    return path
+    return find_executable("PSV_EXECUTABLE", "psv_dijkstra")
 
 
 @pytest.fixture(scope="session")
 def probe() -> Path:
-    path = Path(os.environ.get("PSV_CSR_PROBE", ROOT / "build/test_csr"))
-    if not path.is_file():
-        pytest.fail(f"Build the C++ CSR test probe first: {path}")
-    return path
+    return find_executable("PSV_CSR_PROBE", "test_csr")
+
+
+def test_default_heap_and_removed_auto(tmp_path, executable):
+    binary = write_csr(graph_to_csr(make_random_graph(3)), tmp_path)
+    command = [str(executable), "--graph", str(binary), "--source", "0", "--target", "1"]
+    default = json.loads(subprocess.check_output(command, text=True))
+    explicit = json.loads(subprocess.check_output(command + ["--algorithm", "heap"], text=True))
+    assert default["algorithm"] == default["requested_algorithm"] == "heap"
+    for field in ("length_m", "path_nodes", "path_edges", "settled_nodes"):
+        assert default[field] == explicit[field]
+    rejected = subprocess.run(command + ["--algorithm", "auto"], capture_output=True, text=True)
+    assert rejected.returncode != 0
+    assert "Algorithm must be" in rejected.stderr
+    backends = json.loads(subprocess.check_output([str(executable), "--backends"], text=True))
+    assert "auto_policy" not in backends
+
+
+@pytest.mark.parametrize("algorithm", ["cpu-parallel", "cuda"])
+def test_parallel_backends(tmp_path, executable, monkeypatch, algorithm):
+    monkeypatch.setenv("OMP_NUM_THREADS", "4")
+    monkeypatch.setenv("OMP_DYNAMIC", "FALSE")
+    backends = json.loads(subprocess.check_output([str(executable), "--backends"], text=True))
+    graph = make_random_graph(3)
+    data = graph_to_csr(graph)
+    binary = write_csr(data, tmp_path)
+    if not backends[algorithm]["available"]:
+        failed = subprocess.run([str(executable), "--graph", str(binary), "--source", "0",
+                                 "--target", "1", "--algorithm", algorithm], capture_output=True, text=True)
+        assert failed.returncode != 0
+        assert backends[algorithm]["reason"] in failed.stderr
+        return
+    for source in (0, len(graph) // 2, len(graph) - 1):
+        expected = reference_distances(graph, data, source)
+        for target in (source, len(graph) - 1):
+            report, rows = run_cpp(executable, binary, source, target, algorithm, tmp_path / "distances.csv")
+            assert report["requested_algorithm"] == algorithm
+            assert report["algorithm"] == algorithm
+            check_sssp(data, rows, expected, source)
+            check_route(data, report, expected, source, target)
+            for field in ("gpu_compute_ms", "gpu_upload_ms", "gpu_download_ms"):
+                assert report[field] >= 0 if algorithm == "cuda" else report[field] is None
+
+
+@pytest.mark.parametrize("algorithm", ["delta-cpu", "delta-cuda"])
+@pytest.mark.parametrize("delta", [0.25, 1, 100, 10000])
+def test_delta_pipeline(tmp_path, executable, monkeypatch, algorithm, delta):
+    monkeypatch.setenv("OMP_NUM_THREADS", "4")
+    capabilities = json.loads(subprocess.check_output([str(executable), "--backends"], text=True))
+    if algorithm == "delta-cuda" and not capabilities["cuda"]["available"]:
+        pytest.skip("CUDA unavailable")
+    for case in (0, 3, 7):
+        graph = make_random_graph(case)
+        data = graph_to_csr(graph)
+        binary = write_csr(data, tmp_path)
+        for source in (0, len(graph)-1):
+            output = tmp_path / "delta.csv"
+            result = subprocess.run([str(executable), "--graph", str(binary), "--source", str(source),
+                "--target", str(len(graph)-1), "--algorithm", algorithm, "--delta", str(delta),
+                "--distances", str(output)], capture_output=True, text=True, check=True, timeout=30)
+            with output.open(newline="") as stream: rows = list(csv.DictReader(stream))
+            expected = reference_distances(graph, data, source)
+            check_sssp(data, rows, expected, source)
+            check_route(data, json.loads(result.stdout), expected, source, len(graph)-1)
+
+
+@pytest.mark.parametrize("algorithm", ["heap", "phased", "cpu-parallel", "cuda", "delta-cpu", "delta-cuda"])
+def test_early_stop(tmp_path, executable, monkeypatch, algorithm):
+    monkeypatch.setenv("OMP_NUM_THREADS", "4")
+    backends = json.loads(subprocess.check_output([str(executable), "--backends"], text=True))
+    if algorithm in backends and not backends[algorithm]["available"]:
+        pytest.skip("Backend unavailable")
+    # A first-found target distance of 13 must improve to 11. A long branch
+    # must remain unfinished; zero cycles and an unreachable target are included.
+    graph = nx.MultiDiGraph(crs="epsg:4326")
+    for node in range(12): graph.add_node(node, x=27+node*0.001, y=63)
+    for u,v,w in [(0,1,13),(0,2,8),(2,1,3),(0,3,1),(3,4,0),(4,3,0),
+                  (0,5,100),(5,6,1),(6,7,1),(7,8,1),(8,9,1)]:
+        graph.add_edge(u,v,length=w)
+    data=graph_to_csr(graph)
+    binary=write_csr(data,tmp_path)
+    expected=reference_distances(graph,data,0)
+    from python.benchmark import check_delta
+    reference=tmp_path/"full.csv"
+    run_cpp(executable,binary,0,1,"heap",reference)
+    for delta in (1,10,1000):
+        for target in (0,1,4,9,11):
+            output=tmp_path/"early.csv"
+            completed=subprocess.run([str(executable),"--early-stop","--graph",str(binary),"--source","0",
+                "--target",str(target),"--algorithm",algorithm,"--delta",str(delta),"--distances",str(output)],
+                capture_output=True,text=True,check=True,timeout=30)
+            report=json.loads(completed.stdout)
+            assert report["early_stop"]
+            check_route(data,report,expected,0,target)
+            check_delta(reference,output,binary,0,partial=not report["search_complete"])
+            if target==11: assert report["search_complete"]
+            if target==1 and not algorithm.startswith("delta-"):
+                assert report["settled_nodes"] < sum(math.isfinite(x) for x in expected)
+                assert not report["search_complete"]
+            if not report["search_complete"]:
+                with output.open(newline="") as stream: rows=list(csv.DictReader(stream))
+                assert all(row["state"] in ("final","tentative","unknown") for row in rows)
+
+
+@pytest.mark.parametrize("algorithm,early,expected", [
+    ("delta-cpu",False,1000),("delta-cpu",True,300),
+    ("delta-cuda",False,1000000),("delta-cuda",True,10000)])
+def test_default_delta_widths(tmp_path, executable, algorithm, early, expected):
+    available=json.loads(subprocess.check_output([str(executable),"--backends"],text=True))
+    if not available[algorithm]["available"]: pytest.skip("Backend unavailable")
+    binary=write_csr(graph_to_csr(make_hand_graph()),tmp_path)
+    command=[str(executable),"--graph",str(binary),"--source","0","--target","3","--algorithm",algorithm]
+    if early: command.append("--early-stop")
+    for override in (None,17):
+        report=json.loads(subprocess.check_output(command+([] if override is None else ["--delta",str(override)]),text=True))
+        assert report["delta"]==(expected if override is None else override)
+        assert report["length_m"]==3
 
 
 def test_exact_binary_layout_and_mappings(tmp_path, probe):
@@ -490,7 +630,28 @@ def test_local_extract_preserves_topology_and_uses_osmnx(tmp_path, executable, m
     assert metadata["selected_osm_ways"] == 4 and metadata["selected_osm_nodes"] == 6
     assert metadata["type"] == "osm_extract"
     assert metadata["sha256"] == download_osm.file_sha256(pbf)
+    assert not list(tmp_path.glob("osm-locations-*"))
     validate_graph(graph, executable, tmp_path / "csr", list(range(5)), ("heap", "phased"), True)
+
+
+def test_local_extract_missing_location_preserves_error(tmp_path):
+    xml = tmp_path / "missing-node.osm"
+    xml.write_text('''<osm version="0.6" generator="unit-test">
+      <node id="1" lat="63.0" lon="27.0"/>
+      <way id="101"><nd ref="1"/><nd ref="2"/>
+        <tag k="highway" v="residential"/></way>
+    </osm>''', encoding="utf-8")
+    pbf = tmp_path / "missing-node.osm.pbf"
+    with osmium.SimpleWriter(pbf) as writer:
+        for entity in osmium.FileProcessor(xml):
+            writer.add(entity)
+    polygon = Polygon([(26.999, 62.999), (27.003, 62.999),
+                       (27.003, 63.001), (26.999, 63.001)])
+    original = ox._overpass._download_overpass_network
+    with pytest.raises(ValueError, match="lacks location for node 2 of way 101"):
+        extract_osm.graph_from_extract(pbf, polygon, tmp_path, download_osm.GRAPH_OPTIONS)
+    assert ox._overpass._download_overpass_network is original
+    assert not list(tmp_path.glob("osm-locations-*"))
 
 
 def test_local_extract_restores_supplier_on_failure(tmp_path, monkeypatch):

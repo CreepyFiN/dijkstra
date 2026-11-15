@@ -7,6 +7,7 @@
 namespace psv {
 
 struct DijkstraResult {
+    bool complete = true; // false: unsettled nodes are unknown/tentative, not unreachable
     std::vector<double> distances;
     std::vector<std::uint32_t> predecessor_node;
     std::vector<std::uint64_t> predecessor_edge;
@@ -15,6 +16,9 @@ struct DijkstraResult {
 
 DijkstraResult dijkstra_heap_cpu(CsrView graph, std::uint32_t source);
 DijkstraResult dijkstra_phased_cpu(CsrView graph, std::uint32_t source);
+
+DijkstraResult dijkstra_heap_target(CsrView graph, std::uint32_t source, std::uint32_t target);
+DijkstraResult dijkstra_phased_target(CsrView graph, std::uint32_t source, std::uint32_t target);
 
 enum class PathStatus { reachable, unreachable };
 
