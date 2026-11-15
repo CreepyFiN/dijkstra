@@ -1,9 +1,9 @@
-# Pohjois-Savo Dijkstra
+# Dijkstra algorithm for Pohjois-Savo road network
 
 Shortest-path calculations on the OpenStreetMap road network of Pohjois-Savo,
 Finland. C++17 implements CPU and CUDA algorithms; Python prepares the data and
-validates results against NetworkX Bellman?Ford. Graphs use compressed sparse
-row (CSR) storage. There is no GUI yet.
+validates results against NetworkX Bellman-Ford. Graphs use compressed sparse
+row (CSR) storage. A PySide6 GUI provides an offline road map and route selection.
 
 ## Build
 
@@ -70,6 +70,28 @@ Default bucket widths when `--delta` is omitted:
 These are provisional settings tuned for this dataset; GPU/parallel execution
 is not guaranteed to beat CPU heap Dijkstra.
 
+## Desktop GUI
+
+Install the Python dependencies and build the C++ executable, then launch from
+the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m python.gui
+```
+
+Use **Pick start** / **Pick end** to select road nodes, then **Calculate**.
+Drag to pan and scroll to zoom. Heap and early stopping are selected initially.
+Startup checks available backends; unsupported algorithms are greyed out.
+Advanced settings contain the bucket slider, OpenMP threads, and a 120-second
+timeout. Inapplicable controls are dimmed and disabled. The bucket slider resets
+to the tuned default when the delta backend or search mode changes.
+The map uses the existing CSR and node CSV files; no online map service is needed.
+
+The GUI prefers a CUDA-enabled Release executable when present. Use the File
+menu or `--executable` / `--graph` / `--nodes` to select other files.
+See [GUI controls and checks](tests/TESTING.md#desktop-gui) for details.
+
 ## Tests and benchmarks
 
 Pipeline tests require Python 3.11+ and the packages in `requirements.txt`.
@@ -87,3 +109,12 @@ sweeps, and recorded performance results.
 
 See the **[regional benchmark results](tests/TESTING.md#regional-benchmark-results-2026-11-15)**
 for all six algorithms, comparing early stopping and full-source calculations.
+
+## OpenStreetMap data attribution
+
+Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright).
+The OpenStreetMap extracts and derived road-network datasets included in this
+repository are available under the
+[Open Data Commons Open Database License (ODbL) 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
+This data license is separate from the project's source-code license and does
+not apply to independently generated synthetic test fixtures.

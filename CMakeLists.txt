@@ -110,6 +110,24 @@ if(BUILD_TESTING)
             LABELS "python;integration"
             TIMEOUT 600
         )
+
+        # GUI checks stay optional for users who only install the data pipeline.
+        execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import PySide6"
+            RESULT_VARIABLE PSV_PYSIDE6_IMPORT_RESULT OUTPUT_QUIET ERROR_QUIET)
+        if(PSV_PYSIDE6_IMPORT_RESULT EQUAL 0)
+            add_test(NAME python_gui
+                COMMAND "${CMAKE_COMMAND}" -E env
+                    "PYTHONPATH=${CMAKE_SOURCE_DIR}"
+                    "QT_QPA_PLATFORM=offscreen"
+                    "PSV_EXECUTABLE=$<TARGET_FILE:psv_dijkstra>"
+                    "${Python3_EXECUTABLE}" -m pytest -q
+                    "${CMAKE_SOURCE_DIR}/tests/test_gui.py")
+            set_tests_properties(python_gui PROPERTIES
+                WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+                LABELS "python;gui;integration" TIMEOUT 120)
+        else()
+            message(STATUS "PySide6 not installed: GUI tests are not registered")
+        endif()
     else()
         message(STATUS
             "Python >= 3.11 not found: Python integration tests are not registered"

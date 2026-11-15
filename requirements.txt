@@ -1,4 +1,4 @@
-# Python >= 3.11; CPU-only dependencies.
+# Python >= 3.11; data preparation, validation, and desktop GUI.
 osmnx==2.1.1
 osmium==4.3.2
 networkx==3.5
@@ -6,3 +6,4 @@ numpy==2.2.6
 requests==2.32.5
 shapely==2.1.2
 pytest==8.4.2
+PySide6==6.12.0

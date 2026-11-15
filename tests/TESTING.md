@@ -11,6 +11,7 @@ your configured build directory when appropriate.
 - [Build options](#build)
 - [Runtime behavior](#run)
 - [Tests](#tests)
+- [Desktop GUI](#desktop-gui)
 - [Benchmarks and timing definitions](#benchmark)
 - [Regional benchmark results](#regional-benchmark-results-2026-11-15)
 - [Early stopping and partial results](#target-only--early-stop-benchmarking)
@@ -127,6 +128,100 @@ $env:PSV_CSR_PROBE = (Resolve-Path build-cuda/Debug/test_csr.exe).Path
 The existing real-OSM pytest case checks heap against NetworkX Bellman-Ford.
 Parallel implementations are checked against Bellman-Ford on synthetic inputs;
 the benchmark below can compare their complete regional results against heap.
+
+## Desktop GUI
+
+The GUI requires the pinned PySide6 package in `requirements.txt`. It uses Qt
+Widgets and Graphics View, with no browser, web server, map-tile download, or
+additional plotting library. All route calculations run in `psv_dijkstra`.
+
+Launch from the repository root after building a C++ executable:
+
+```powershell
+.\.venv\Scripts\python.exe -m python.gui
+# Explicit files, including a node CSV with a nonstandard filename:
+.\.venv\Scripts\python.exe -m python.gui --executable build-cuda/Release/psv_dijkstra.exe --graph data/processed/graph.csr --nodes data/processed/graph_nodes.csv
+```
+
+The default graph is `data/processed/graph.csr`; its companion node file is
+`<graph stem>_nodes.csv` in the same directory. The File menu can open a different
+CSR/CSV pair or select an executable. `PSV_EXECUTABLE`, when set, overrides
+executable discovery. Otherwise the GUI searches `build-cuda/Release`,
+`build/Release`, `build-cuda`, `build`, `build-cuda/Debug`, then `build/Debug`,
+using the platform's executable suffix. Selecting a CUDA build does not select
+the CUDA algorithm: heap remains the initial choice.
+
+- Pick start/end on the map, or enter internal node indices. A click snaps to
+  the closest node within 18 screen pixels. Coordinates and OSM IDs appear
+  below the inputs. Swap reverses the endpoints; direction restrictions remain
+  enforced. A snapped node can belong to a disconnected component.
+- Drag to pan, scroll or use +/- to zoom, and use Fit map / Fit route to frame
+  the network or result. Escape leaves endpoint-selection mode. Start is green,
+  destination red, and the route orange.
+- Stop-at-destination is initially checked. Uncheck for full SSSP. Full mode
+  still displays the chosen destination's route; changing endpoints causes a
+  new calculation, without reusing a cached predecessor tree.
+- All six algorithms are offered. Startup runs `--backends`, with algorithm
+  selection disabled until the check completes. Unavailable options are greyed
+  out, marked unavailable, and have a reason in their tooltip. Requests never
+  silently switch algorithms. The check repeats when changing executables.
+  Advanced settings expose bucket width, OpenMP workers, and a per-request
+  timeout (initially 120 seconds). OpenMP controls are dimmed and disabled except
+  for `cpu-parallel` and `delta-cpu` when the executable supports OpenMP; CPU
+  delta-stepping remains usable serially without OpenMP.
+- Bucket width is under Advanced settings, dimmed and disabled outside
+  delta-stepping. The discrete
+  slider uses 100 m steps through 1000 m, 1000 m steps through 10000 m,
+  10000 m steps through 100000 m, 100000 m steps through 1000000 m, and
+  1000000 m steps through 10000000 m. The numeric field also accepts exact
+  integer widths within 100..10000000 m. Reset to default restores the preset.
+  **Every change between CPU/CUDA delta backends or full/early-stop mode resets
+  a manual override:** CPU full/early = 1000/300 m; CUDA full/early =
+  1000000/10000 m. Classic algorithms receive no `--delta` argument.
+- Calculate launches an asynchronous `QProcess`; Cancel stops it. Busy
+  calculations show an indeterminate indicator, since the CLI does not report
+  intermediate progress. Loading uses a background worker with stage progress.
+  Closing the window stops background work before releasing it.
+- Results distinguish C++ `algorithm_ms` from total request time, which also
+  includes executable startup, graph I/O, route reconstruction, and JSON output.
+  The GUI does not write a full distances CSV. Optional GPU timing details use
+  the same definitions as the benchmark. Endpoint/settings changes clear the
+  old highlighted route and mark the result outdated.
+
+The loader checks the CSR layout, CSV row count/index order, and coordinates
+before rendering. Use the CSV generated with that exact graph: CSR contains no
+OSM IDs with which to verify the CSV's provenance. Roads are projected to a
+local planar coordinate system for display;
+route lengths always come from the original CSR metre weights. The unsimplified
+node chains retain road curvature. Display-only deduplication of coincident
+segments does not change the directed graph or parallel edges. Spatial tiles
+provide detailed vector drawing at close zoom, and a cached overview image
+reduces redraw cost at regional zoom. The map contains roads rather than street
+labels, buildings, addresses, or background tiles.
+
+Run the GUI checks without opening windows:
+
+```powershell
+$env:PSV_EXECUTABLE = (Resolve-Path build-cuda/Release/psv_dijkstra.exe).Path
+.\.venv\Scripts\python.exe -m pytest tests/test_gui.py -q
+# Once CMake has been reconfigured with PySide6 installed:
+ctest --test-dir build-cuda -C Release -L gui --output-on-failure
+```
+
+`python_gui` is an optional CTest, registered when the selected Python can import
+PySide6. The tests set `QT_QPA_PLATFORM=offscreen`; no pytest-qt plugin is needed.
+Checks cover bucket reset transitions, flag construction, malformed datasets,
+projection/snapping, map clicks/layers, JSON process errors/cancellation/timeouts,
+and routing through every available backend in full and early-stop modes on a
+small directed fixture, including unreachable and identical endpoints. The full
+regional Bellman-Ford reference remains in the separate pipeline test.
+
+The initial regional GUI check loaded all 448,192 nodes and 896,165 directed
+edges into 466 display tiles in about 7–9 seconds on the local machine. Map
+preparation ran in a background thread. Full heap/CPU-delta/GPU-delta runs from
+0 to 448191 displayed the same 68.644 km route length; early heap/CUDA and both
+delta backends from 0 to 1 displayed 0.503 km. These are local UI smoke checks,
+not new algorithm benchmarks or a repeat of the regional Bellman-Ford test.
 
 ## Benchmark
 
