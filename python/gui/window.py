@@ -5,22 +5,38 @@ import math
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QAction, QBrush, QCloseEvent, QKeySequence, QPalette
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox,
-    QGraphicsOpacityEffect, QHBoxLayout, QLabel, QMainWindow, QProgressBar, QPushButton, QScrollArea,
-    QSpinBox, QSplitter, QVBoxLayout, QWidget,
+    QAbstractButton, QAbstractSpinBox, QApplication, QButtonGroup, QCheckBox,
+    QComboBox, QFileDialog, QFormLayout, QGroupBox, QMenuBar,
+    QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLayout, QMainWindow, QProgressBar, QPushButton, QScrollArea,
+    QSlider, QSpinBox, QSplitter, QVBoxLayout, QWidget,
 )
 
-from .backend import ALGORITHMS, ROOT, JsonProcess, RouteRequest, find_executable
+from .backend import ALGORITHMS, ROOT, JsonProcess, find_executable
 from .buckets import BucketControl
 from .data import DatasetLoader, MapData
+from .endpoints import EndpointRow
 from .map_view import MapView
+from .routing import JourneyRequest, RouteRunner
 
-LABELS = {"heap": "Heap — serial CPU", "phased": "Phased — serial CPU scan",
-          "cpu-parallel": "Dijkstra — OpenMP CPU", "cuda": "Dijkstra — CUDA GPU",
-          "delta-cpu": "Delta-stepping — CPU", "delta-cuda": "Delta-stepping — CUDA GPU"}
+LABELS = {"heap": "Dijkstra — serial CPU, heap", "phased": "Dijkstra — serial CPU, phased",
+          "cpu-parallel": "Dijkstra — parallel CPU, OpenMP", "cuda": "Dijkstra — parallel GPU, CUDA",
+          "delta-cpu": "Delta-stepping — parallel CPU, OpenMP",
+          "delta-cuda": "Delta-stepping — parallel GPU, CUDA"}
+LEG_HINT = "Hover over a leg to highlight it. Right-click shared sections to switch legs."
+
+
+def initial_destination(node_count: int) -> int:
+    """Prefer 100000, or the largest valid lower power of ten."""
+    limit = min(100_000, node_count - 1)
+    if limit < 1:
+        return 0
+    node = 1
+    while node * 10 <= limit:
+        node *= 10
+    return node
 
 
 class MainWindow(QMainWindow):
@@ -34,15 +50,23 @@ class MainWindow(QMainWindow):
         self.executable = executable if executable is not None else find_executable()
         self.loader: DatasetLoader | None = None
         self.capabilities: dict | None = None
-        self.request: RouteRequest | None = None
+        self.request: JourneyRequest | None = None
         self._close_requested = False
-        self._pick_target: str | None = None
-        self.route_job, self.probe_job = JsonProcess(self), JsonProcess(self)
+        self._pick_target: EndpointRow | None = None
+        self.middle_rows: list[EndpointRow] = []
+        self.route_job, self.probe_job = RouteRunner(self), JsonProcess(self)
         self._build_ui()
         self._build_menu()
+        # pressed also handles keyboard/programmatic button activation. The
+        # application filter covers child widgets, dropdown arrows and menus.
+        for button in self.findChildren(QAbstractButton):
+            if button not in self.pick_group.buttons():
+                button.pressed.connect(self._cancel_picking)
+        QApplication.instance().installEventFilter(self)
         self.route_job.completed.connect(self._route_completed)
         self.route_job.failed.connect(self._route_failed)
         self.route_job.cancelled.connect(self._route_cancelled)
+        self.route_job.progress.connect(self.status.setText)
         self.probe_job.completed.connect(self._probe_completed)
         self.probe_job.failed.connect(self._probe_failed)
         self.probe_job.cancelled.connect(self._probe_cancelled)
@@ -67,6 +91,7 @@ class MainWindow(QMainWindow):
         """)
         self.sidebar = QWidget()
         controls = QVBoxLayout(self.sidebar)
+        controls.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
         controls.setContentsMargins(16, 14, 16, 14)
         title = QLabel("Plan a route")
         title.setObjectName("title")
@@ -77,26 +102,29 @@ class MainWindow(QMainWindow):
 
         self.endpoint_box = QGroupBox("Endpoints")
         endpoint_layout = QVBoxLayout(self.endpoint_box)
-        self.source, self.target = QSpinBox(), QSpinBox()
-        self.source.setAccessibleName("Start node index")
-        self.target.setAccessibleName("Destination node index")
-        self.source_details, self.target_details = QLabel(), QLabel()
-        self.source_details.setWordWrap(True)
-        self.target_details.setWordWrap(True)
-        self.pick_source, self.pick_destination = QPushButton("Pick start"), QPushButton("Pick end")
         self.pick_group = QButtonGroup(self)
-        for caption, spin, button, detail in (
-                ("Start node", self.source, self.pick_source, self.source_details),
-                ("Destination node", self.target, self.pick_destination, self.target_details)):
-            endpoint_layout.addWidget(QLabel(caption))
-            row = QHBoxLayout()
-            row.addWidget(spin, 1)
-            row.addWidget(button)
-            endpoint_layout.addLayout(row)
-            endpoint_layout.addWidget(detail)
-            button.setCheckable(True)
-            self.pick_group.addButton(button)
-        self.swap = QPushButton("Swap endpoints")
+        self.start_row = EndpointRow("Start node", "Pick start")
+        self.destination_row = EndpointRow("Destination node", "Pick end")
+        self.source, self.target = self.start_row.node, self.destination_row.node
+        self.source_details, self.target_details = self.start_row.details, self.destination_row.details
+        self.pick_source, self.pick_destination = self.start_row.pick_button, self.destination_row.pick_button
+        endpoint_content = QWidget()
+        endpoint_content_layout = QVBoxLayout(endpoint_content)
+        endpoint_content_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+        endpoint_content_layout.setContentsMargins(4, 4, 4, 4)
+        endpoint_content_layout.addWidget(self.start_row)
+        self.middle_container = QWidget()
+        self.middle_layout = QVBoxLayout(self.middle_container)
+        self.middle_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.middle_layout.setContentsMargins(0, 0, 0, 0)
+        endpoint_content_layout.addWidget(self.middle_container)
+        self.add_middle_button = QPushButton("Add a middle point")
+        endpoint_content_layout.addWidget(self.add_middle_button)
+        endpoint_content_layout.addWidget(self.destination_row)
+        endpoint_content_layout.addStretch(1)
+        endpoint_layout.addWidget(endpoint_content)
+        self.swap = QPushButton("Reverse route")
+        self.swap.setToolTip("Reverse the start, middle-point order, and destination")
         endpoint_layout.addWidget(self.swap)
         controls.addWidget(self.endpoint_box)
 
@@ -108,7 +136,7 @@ class MainWindow(QMainWindow):
         settings.addWidget(self.algorithm)
         self.early_stop = QCheckBox("Stop when destination is finalized")
         self.early_stop.setChecked(True)
-        self.early_stop.setToolTip("Uncheck to compute shortest distances to every reachable node")
+        self.early_stop.setToolTip("Stop at the next requested point on each leg; uncheck for full search from each leg's start")
         settings.addWidget(self.early_stop)
         self.advanced_toggle = QCheckBox("Advanced settings")
         settings.addWidget(self.advanced_toggle)
@@ -134,6 +162,7 @@ class MainWindow(QMainWindow):
         self.timeout.setRange(1, 3600)
         self.timeout.setValue(120)
         self.timeout.setSuffix(" s")
+        self.timeout.setToolTip("Maximum duration for the entire journey, including all legs")
         timeout_layout = QFormLayout()
         timeout_layout.addRow("Timeout", self.timeout)
         advanced.addLayout(timeout_layout)
@@ -146,17 +175,22 @@ class MainWindow(QMainWindow):
         self.calculate.setObjectName("calculate")
         buttons.addWidget(self.calculate, 1)
         buttons.addWidget(self.cancel)
-        controls.addLayout(buttons)
         self.backend_info = QLabel("Select a routing executable from the File menu if needed.")
         self.backend_info.setWordWrap(True)
         controls.addWidget(self.backend_info)
         controls.addStretch(1)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(self.sidebar)
-        scroll.setMinimumWidth(330)
-        scroll.setMaximumWidth(430)
+        self.sidebar_scroll = QScrollArea()
+        self.sidebar_scroll.setWidgetResizable(True)
+        self.sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sidebar_scroll.setWidget(self.sidebar)
+        left_panel = QWidget()
+        left_panel.setMinimumWidth(350)
+        left_panel.setMaximumWidth(450)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addWidget(self.sidebar_scroll, 1)
+        left_layout.addLayout(buttons)
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -184,6 +218,26 @@ class MainWindow(QMainWindow):
         self.result.setWordWrap(True)
         self.metrics = QLabel("Calculation time and finalized-node count will appear here.")
         self.metrics.setWordWrap(True)
+        self.leg_controls = QWidget()
+        leg_layout = QVBoxLayout(self.leg_controls)
+        leg_layout.setContentsMargins(0, 0, 0, 0)
+        leg_row = QHBoxLayout()
+        leg_row.addWidget(QLabel("Highlight leg"))
+        self.leg_combo = QComboBox()
+        self.leg_combo.setAccessibleName("Journey leg to highlight")
+        self.leg_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.leg_combo.setMinimumContentsLength(16)
+        self.leg_combo.addItem("All legs", None)
+        self.leg_combo.setToolTip("Select a leg to keep it highlighted; All legs restores hover highlighting")
+        leg_row.addWidget(self.leg_combo, 1)
+        leg_layout.addLayout(leg_row)
+        self.leg_info = QLabel(LEG_HINT)
+        self.leg_info.setWordWrap(True)
+        self.leg_info.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        # Hover text must not resize the map underneath the cursor.
+        self.leg_info.setFixedHeight(self.leg_info.fontMetrics().lineSpacing() * 3)
+        leg_layout.addWidget(self.leg_info)
+        self.leg_controls.hide()
         self.gpu_details = QLabel()
         self.gpu_details.setWordWrap(True)
         self.gpu_toggle = QCheckBox("Show GPU timing details")
@@ -191,11 +245,12 @@ class MainWindow(QMainWindow):
         self.gpu_details.hide()
         result_layout.addWidget(self.result)
         result_layout.addWidget(self.metrics)
+        result_layout.addWidget(self.leg_controls)
         result_layout.addWidget(self.gpu_toggle)
         result_layout.addWidget(self.gpu_details)
         right_layout.addWidget(results)
         splitter = QSplitter()
-        splitter.addWidget(scroll)
+        splitter.addWidget(left_panel)
         splitter.addWidget(right)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([350, 970])
@@ -213,11 +268,10 @@ class MainWindow(QMainWindow):
         self.cursor_coordinates = QLabel()
         self.statusBar().addPermanentWidget(self.cursor_coordinates)
 
-        self.source.valueChanged.connect(self._endpoints_changed)
-        self.target.valueChanged.connect(self._endpoints_changed)
+        self._connect_endpoint(self.start_row)
+        self._connect_endpoint(self.destination_row)
+        self.add_middle_button.clicked.connect(self.add_middle_point)
         self.swap.clicked.connect(self._swap_endpoints)
-        self.pick_source.clicked.connect(lambda checked: self._pick_mode("source" if checked else None))
-        self.pick_destination.clicked.connect(lambda checked: self._pick_mode("target" if checked else None))
         self.map.nodePicked.connect(self._node_picked)
         self.map.pickMissed.connect(lambda: self.status.setText("No node nearby. Click closer to a road or zoom in."))
         self.map.coordinateHovered.connect(lambda lat, lon: self.cursor_coordinates.setText(f"{lat:.5f}, {lon:.5f}"))
@@ -234,6 +288,10 @@ class MainWindow(QMainWindow):
         self.fit_route_button.clicked.connect(self.map.fit_route)
         self.clear_button.clicked.connect(self._clear_result)
         self.gpu_toggle.toggled.connect(self.gpu_details.setVisible)
+        self.leg_combo.currentIndexChanged.connect(self._leg_selection_changed)
+        self.map.legHighlighted.connect(self._leg_highlighted)
+        self.map.pinnedLegChanged.connect(self._map_pinned_leg_changed)
+        self.map.routeCleared.connect(self._clear_leg_controls)
 
     def _build_menu(self) -> None:
         menu = self.menuBar().addMenu("File")
@@ -251,8 +309,27 @@ class MainWindow(QMainWindow):
         menu.addAction(quit_action)
         escape = QAction(self)
         escape.setShortcut(QKeySequence(Qt.Key.Key_Escape))
-        escape.triggered.connect(lambda: self._pick_mode(None))
+        escape.triggered.connect(self._cancel_picking)
         self.addAction(escape)
+
+    def eventFilter(self, watched, event) -> bool:
+        if (self._pick_target is not None and event.type() == QEvent.Type.MouseButtonPress
+                and isinstance(watched, QWidget) and self.isAncestorOf(watched)
+                and watched is not self.map and not self.map.isAncestorOf(watched)):
+            control = watched
+            while control is not None and control is not self:
+                if isinstance(control, QAbstractButton) and control in self.pick_group.buttons():
+                    break  # Pick buttons switch the active endpoint normally.
+                if isinstance(control, (QAbstractButton, QComboBox, QAbstractSpinBox, QSlider, QMenuBar)):
+                    self._cancel_picking()
+                    break
+                control = control.parentWidget()
+        return super().eventFilter(watched, event)
+
+    def _cancel_picking(self) -> None:
+        if self._pick_target is not None:
+            self._pick_mode(None)
+            self.status.setText("Map picking cancelled. Choose endpoints or calculate a route.")
 
     def _choose_dataset(self) -> None:
         name, _ = QFileDialog.getOpenFileName(self, "Open CSR graph", str(ROOT / "data/processed"), "CSR graphs (*.csr)")
@@ -290,13 +367,14 @@ class MainWindow(QMainWindow):
     def _dataset_loaded(self, data: MapData) -> None:
         if self._close_requested:
             return
+        self._discard_middle_rows()
         self.data = data
         self.map.set_dataset(data)
         for spin in (self.source, self.target):
             spin.blockSignals(True)
             spin.setRange(0, data.node_count - 1)
         self.source.setValue(0)
-        self.target.setValue(min(1, data.node_count - 1))
+        self.target.setValue(initial_destination(data.node_count))
         for spin in (self.source, self.target):
             spin.blockSignals(False)
         self.dataset_info.setText(f"{data.graph_path.stem} · {data.node_count:,} nodes · {len(data.targets):,} edges")
@@ -402,33 +480,92 @@ class MainWindow(QMainWindow):
     def _endpoints_changed(self, *_args) -> None:
         if self.data is None:
             return
-        for node, label in ((self.source.value(), self.source_details), (self.target.value(), self.target_details)):
-            label.setText(f"OSM {self.data.osm_ids[node]}\n{self.data.latitude[node]:.6f}, {self.data.longitude[node]:.6f}")
-        self.map.show_endpoints(self.source.value(), self.target.value())
+        for row in self._endpoint_rows():
+            node = row.node.value()
+            row.details.setText(f"OSM {self.data.osm_ids[node]}\n{self.data.latitude[node]:.6f}, {self.data.longitude[node]:.6f}")
+        self.map.show_endpoints(self.source.value(), self.target.value(),
+                                [row.node.value() for row in self.middle_rows])
         self._invalidate()
 
-    def _swap_endpoints(self) -> None:
-        source, target = self.source.value(), self.target.value()
-        self.source.setValue(target)
-        self.target.setValue(source)
+    def _endpoint_rows(self) -> list[EndpointRow]:
+        return [self.start_row, *self.middle_rows, self.destination_row]
 
-    def _pick_mode(self, endpoint: str | None) -> None:
+    def route_nodes(self) -> tuple[int, ...]:
+        return tuple(row.node.value() for row in self._endpoint_rows())
+
+    def _connect_endpoint(self, row: EndpointRow) -> None:
+        self.pick_group.addButton(row.pick_button)
+        row.node.valueChanged.connect(self._endpoints_changed)
+        row.pick_button.clicked.connect(lambda checked: self._pick_mode(row if checked else None))
+        row.removeRequested.connect(lambda: self.remove_middle_point(row))
+        if hasattr(row, "remove_button"):
+            row.remove_button.pressed.connect(self._cancel_picking)
+
+    def add_middle_point(self) -> None:
+        if self.data is None or self.route_job.busy or self.loader is not None:
+            return
+        row = EndpointRow(f"Middle node #{len(self.middle_rows) + 1}", removable=True)
+        row.node.setRange(0, self.data.node_count - 1)
+        row.node.setValue(self.middle_rows[-1].node.value() if self.middle_rows else self.source.value())
+        self.middle_rows.append(row)
+        self.middle_layout.addWidget(row)
+        self._connect_endpoint(row)
+        self._endpoints_changed()
+        QTimer.singleShot(0, self, lambda: self._reveal_middle_point(row))
+        row.node.setFocus()
+        row.node.selectAll()
+        self._pick_mode(row)
+
+    def _reveal_middle_point(self, row: EndpointRow) -> None:
+        if row in self.middle_rows:
+            self.sidebar_scroll.ensureWidgetVisible(row)
+
+    def remove_middle_point(self, row: EndpointRow) -> None:
+        if row not in self.middle_rows or self.route_job.busy or self.loader is not None:
+            return
+        if self._pick_target is row:
+            self._pick_mode(None)
+        self.middle_rows.remove(row)
+        self.pick_group.removeButton(row.pick_button)
+        self.middle_layout.removeWidget(row)
+        row.setParent(None)
+        row.deleteLater()
+        for index, remaining in enumerate(self.middle_rows, 1):
+            remaining.set_caption(f"Middle node #{index}")
+        self._endpoints_changed()
+
+    def _discard_middle_rows(self) -> None:
+        self._pick_mode(None)
+        for row in self.middle_rows:
+            self.pick_group.removeButton(row.pick_button)
+            self.middle_layout.removeWidget(row)
+            row.setParent(None)
+            row.deleteLater()
+        self.middle_rows.clear()
+
+    def _swap_endpoints(self) -> None:
+        self._pick_mode(None)
+        for row, node in zip(self._endpoint_rows(), reversed(self.route_nodes())):
+            row.node.blockSignals(True)
+            row.node.setValue(node)
+            row.node.blockSignals(False)
+        self._endpoints_changed()
+
+    def _pick_mode(self, endpoint: EndpointRow | None) -> None:
         self._pick_target = endpoint
         self.pick_group.setExclusive(False)
-        self.pick_source.setChecked(endpoint == "source")
-        self.pick_destination.setChecked(endpoint == "target")
+        for row in self._endpoint_rows():
+            row.pick_button.setChecked(endpoint is row)
         self.pick_group.setExclusive(True)
         self.map.set_pick_mode(endpoint is not None)
         if endpoint is not None:
-            self.status.setText("Click near a road to choose the " + ("start." if endpoint == "source" else "destination."))
+            self.status.setText("Click near a road to choose " + endpoint.title.text().lower() + ".")
 
     def _node_picked(self, node: int) -> None:
         if self.route_job.busy or self.loader is not None:
             return
-        if self._pick_target == "source":
-            self.source.setValue(node)
-        elif self._pick_target == "target":
-            self.target.setValue(node)
+        if self._pick_target is not None:
+            self._pick_target.node.setValue(node)
         self._pick_mode(None)
         self.status.setText(f"Selected node {node}. Ready to calculate.")
 
@@ -455,10 +592,9 @@ class MainWindow(QMainWindow):
             return
         self._pick_mode(None)
         self._clear_result()
-        self.request = RouteRequest(self.data.graph_path, self.source.value(), self.target.value(),
-                                    self.algorithm.currentData(), self.early_stop.isChecked(),
-                                    self.bucket.value, self.threads.value())
-        self.route_job.start(self.executable, self.request.arguments(), self.timeout.value() * 1000, self.request.threads)
+        self.request = JourneyRequest(self.data.graph_path, self.route_nodes(), self.algorithm.currentData(),
+                                      self.early_stop.isChecked(), self.bucket.value, self.threads.value())
+        self.route_job.start(self.executable, self.data, self.request, self.timeout.value() * 1000)
         self.result.setText("Calculating…")
         self.status.setText("Calculating shortest path…")
         self.progress.setRange(0, 0)
@@ -467,24 +603,33 @@ class MainWindow(QMainWindow):
 
     def _route_completed(self, report: dict, elapsed_ms: float) -> None:
         try:
-            self.data.validate_route(report, self.request.source, self.request.target)
+            # RouteRunner validates each directed leg before joining its path.
+            # A valid multi-leg journey can revisit vertices across legs.
             if (report.get("algorithm") != self.request.algorithm
                     or report.get("early_stop") != self.request.early_stop
                     or not math.isfinite(report["algorithm_ms"]) or report["algorithm_ms"] < 0):
                 raise ValueError("Unexpected algorithm, search mode, or timing")
             if report["reachable"]:
-                self.map.show_route(report["path_nodes"])
+                self.map.show_route(report["path_nodes"], report["legs"])
+                self._populate_leg_controls(report["legs"])
                 self.result.setText(f"{report['length_m'] / 1000:,.3f} km · {LABELS[report['algorithm']]}")
                 self.status.setText("Route ready")
             else:
-                self.result.setText("No directed route between these nodes")
-                self.status.setText("Destination is unreachable from the selected start")
+                self.result.setText("No directed route — " + report["failed_leg"])
+                self.status.setText("Unreachable connection: " + report["failed_leg"])
+            multiple = report["leg_count"] > 1
+            summary = ("Stopped at unreachable leg" if not report["reachable"] else
+                       "Full searches completed" if report["search_complete"] else
+                       "Partial searches; requested stops finalized")
             self.metrics.setText(f"Calculation: {report['algorithm_ms']:,.2f} ms   ·   Total request: {elapsed_ms:,.2f} ms\n"
-                                 f"Finalized nodes: {report['settled_nodes']:,}   ·   "
-                                 + ("Full search completed" if report["search_complete"] else "Partial search; destination finalized")
+                                 + (f"Legs searched: {report['attempted_legs']}/{report['leg_count']}   ·   " if multiple else "")
+                                 + ("Finalized-node visits: " if multiple else "Finalized nodes: ")
+                                 + f"{report['settled_nodes']:,}   ·   "
+                                 + summary
                                  + (f"   ·   Bucket: {report['delta']:,} m" if report.get("delta") is not None else ""))
             if report.get("gpu_compute_ms") is not None:
-                self.gpu_details.setText(f"GPU computation phase: {report['gpu_compute_ms']:,.2f} ms\n"
+                scope = f" (sum of {report['attempted_legs']} legs)" if multiple else ""
+                self.gpu_details.setText(f"GPU computation phase{scope}: {report['gpu_compute_ms']:,.2f} ms\n"
                                          f"Upload: {report['gpu_upload_ms']:,.2f} ms · Download: {report['gpu_download_ms']:,.2f} ms")
                 self.gpu_toggle.show()
                 self.gpu_details.setVisible(self.gpu_toggle.isChecked())
@@ -492,6 +637,38 @@ class MainWindow(QMainWindow):
             self._route_failed(str(error))
             return
         self._route_finished()
+
+    def _clear_leg_controls(self) -> None:
+        previous = self.leg_combo.blockSignals(True)
+        self.leg_combo.clear()
+        self.leg_combo.addItem("All legs", None)
+        self.leg_combo.blockSignals(previous)
+        self.leg_info.setText(LEG_HINT)
+        self.leg_controls.hide()
+
+    def _populate_leg_controls(self, legs: list[dict]) -> None:
+        self._clear_leg_controls()
+        previous = self.leg_combo.blockSignals(True)
+        for index, leg in enumerate(legs):
+            label = f"{leg['label']} · {leg['length_m'] / 1000:,.3f} km"
+            self.leg_combo.addItem(label, index)
+            self.leg_combo.setItemData(index + 1, label, Qt.ItemDataRole.ToolTipRole)
+        self.leg_combo.blockSignals(previous)
+        self.leg_controls.setVisible(len(legs) > 1)
+
+    def _leg_selection_changed(self, _index: int) -> None:
+        self.map.set_pinned_leg(self.leg_combo.currentData())
+
+    def _map_pinned_leg_changed(self, index: int) -> None:
+        previous = self.leg_combo.blockSignals(True)
+        self.leg_combo.setCurrentIndex(index + 1)
+        self.leg_combo.blockSignals(previous)
+
+    def _leg_highlighted(self, _index: int, message: str) -> None:
+        text = message or LEG_HINT
+        if self.leg_info.text() != text:
+            self.leg_info.setText(text)
+            self.leg_info.setToolTip(text)
 
     def _route_failed(self, message: str) -> None:
         self.map.clear_route()

@@ -1,301 +1,313 @@
 # Testing and benchmarking guide
 
-Detailed build options, correctness checks, performance measurements, and bucket
-width tuning for Pohjois-Savo Dijkstra. See the [project README](../README.md)
-for the overview, available algorithms, and quick start.
+Build, GUI controls, validation, and performance details. See the
+[README](../README.md) for the quick start.
 
-**Run all commands from the repository root**, not from the `tests` directory.
-Examples use PowerShell and Windows executable paths. Replace `build-cuda` with
-your configured build directory when appropriate.
+**Run commands from the repository root.** PowerShell examples use
+`build-cuda/Release`; **users of the standard `build` directory substitute `build/Release` and
+`--test-dir build`**. Keep the build directory and configuration consistent.
 
-- [Build options](#build)
-- [Runtime behavior](#run)
-- [Tests](#tests)
+- [Build and environment](#build)
+- [Data preparation](#data-preparation)
 - [Desktop GUI](#desktop-gui)
-- [Benchmarks and timing definitions](#benchmark)
-- [Regional benchmark results](#regional-benchmark-results-2026-11-15)
-- [Early stopping and partial results](#target-only--early-stop-benchmarking)
-- [Delta-stepping and bucket tuning](#delta-stepping)
+- [Command-line runtime](#run)
+- [Tests](#tests)
+- [Benchmarks and timing](#benchmark)
+- [Early stopping](#target-only--early-stop-benchmarking)
+- [Regional results](#regional-benchmark-results)
+- [Delta-stepping and tuning](#delta-stepping)
 - [Automatic bucket defaults](#automatic-bucket-defaults)
 
-For a fresh Python test environment (Python 3.11+):
+## Build
+
+Requires CMake 3.24+ and a C++17 compiler. On Windows, install Visual Studio or
+Build Tools with Desktop development with C++ and a Windows SDK. The GUI/pipeline
+also need Python 3.11+; Python is optional for standalone C++ execution.
+Install dependencies **before configuring CMake** so it finds the environment
+and registers the Python/GUI tests:
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-## Build
-
-Requires CMake 3.24+ and a C++17 compiler. CUDA and OpenMP are optional and
-detected at configuration time. Building CUDA requires a compatible NVIDIA
-CUDA toolkit and host compiler; executing it requires a supported GPU/driver.
+Standard C++ build (CUDA and OpenMP are detected when available):
 
 ```powershell
 cmake -S . -B build
 cmake --build build --config Release
 ```
 
-For a serial-only build:
+For a build without CUDA:
 
 ```powershell
-cmake -S . -B build-cpu-only -DPSV_ENABLE_CUDA=OFF -DPSV_ENABLE_OPENMP=OFF
+cmake -S . -B build-cpu-only -DPSV_ENABLE_CUDA=OFF
 cmake --build build-cpu-only --config Release
 ```
 
-On Windows, if CMake reports missing CUDA integration in Visual Studio but the
-toolkit is installed, use the toolkit's integration files explicitly in a
-**new build directory**:
+OpenMP remains available in that build; add `-DPSV_ENABLE_OPENMP=OFF` to the
+configuration command for a fully serial build. Existing build directories
+retain cached option values. To re-enable previously disabled CUDA, configure
+with `-DPSV_ENABLE_CUDA=ON` or use a new directory.
+
+CUDA requires a compatible NVIDIA toolkit/host compiler and supported GPU/driver.
+With Visual Studio, select the toolkit's integration files in a **new build
+directory** if installed integration is missing:
 
 ```powershell
-cmake -S . -B build-cuda -T "cuda=$env:CUDA_PATH"
+cmake -S . -B build-cuda -T "cuda=$env:CUDA_PATH" -DPSV_ENABLE_CUDA=ON
 cmake --build build-cuda --config Release
 ```
 
-This selects the installed toolkit without copying files into Visual Studio.
-`CUDA_PATH` must point to the toolkit root. This command is for the Visual
-Studio generator; Ninja/Unix generators do not use `-T`. CMake generator/toolset
-settings cannot be changed in an already configured build directory.
+`CUDA_PATH` must point to the toolkit root. No integration files need copying.
+Generator/toolset choices cannot change within an existing build directory.
+Ninja/Unix generators omit `-T`; CUDA detection defaults to ON. Architectures
+default to 75 and 86 with PTX; override `-DCMAKE_CUDA_ARCHITECTURES=...` for
+other toolkit-supported hardware. Runtime detection probes a kernel and checks
+initialization/free memory. CUDA runtime linkage is static; CPU-only builds have
+no CUDA dependency. `PSV_ENABLE_SANITIZERS=ON` supports GCC/Clang only; use a
+separate Debug build for sanitizer checks.
 
-CUDA builds default to architectures 75 and 86, including PTX. Override
-`CMAKE_CUDA_ARCHITECTURES` when preparing a build for other supported hardware.
-Runtime detection launches a tiny probe kernel, checks initialization and free
-memory, and selects a usable GPU. CUDA runtime linkage is static; a CPU-only
-build has no CUDA dependency at all.
+On Linux/macOS, create the environment with `python3 -m venv .venv` and replace
+Windows Python paths with `.venv/bin/python`. For single-config Release builds,
+use `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`, then
+`cmake --build build`. Executables sit directly in `build/`, without `.exe`.
+CUDA additionally depends on platform/toolkit support.
 
-## Run
+## Data preparation
 
-Examples below use the Windows CUDA-enabled Release build:
-
-```powershell
-.\build-cuda\Release\psv_dijkstra.exe --backends
-.\build-cuda\Release\psv_dijkstra.exe --graph data/processed/graph.csr --source 0 --target 1 --algorithm cuda
-.\build-cuda\Release\psv_dijkstra.exe --graph data/processed/graph.csr --source 0 --target 1 --algorithm cpu-parallel
-.\build-cuda\Release\psv_dijkstra.exe --graph data/processed/graph.csr --source 0 --target 1 --algorithm heap
-```
-
-Source and target are **internal node indices**, mapped to OSM IDs and
-coordinates in `data/processed/graph_nodes.csv`. Add `--distances output.csv`
-to save all distances, predecessors, and settled flags.
-
-Set OpenMP worker count through its standard environment variable:
+Regional CSR/node/edge mappings and `data/raw/pohjois_savo.graphml.gz` are
+included. Existing-data GUI/tests need no download. To regenerate mappings,
+use a separate output folder:
 
 ```powershell
-$env:OMP_NUM_THREADS = "4"
+.\.venv\Scripts\python.exe python/convert_to_csr.py --graphml data/raw/pohjois_savo.graphml.gz `
+  --output-dir build-data/processed
 ```
 
-Heap is the default when `--algorithm` is omitted. JSON reports both
-`requested_algorithm` and `algorithm`. Explicit backend requests fail clearly
-if unavailable; there is no automatic selection or fallback.
-
-Classic Dijkstra backends settle one global minimum node at a time. OpenMP keeps per-worker priority queues,
-avoiding full-node scans. CUDA caches minima for 256-node tiles and recomputes
-only changed tiles. It runs up to 1024 ordered rounds per kernel launch before
-copying a control result to the host, and uses warp shuffles for reductions.
-The batched kernel uses one block, so block barriers provide ordering without
-requiring cooperative-grid support. It trades whole-GPU occupancy for lower
-synchronization and transfer overhead. Graphs and results stay on the GPU
-between batches; they are still allocated/uploaded for each new calculation.
-Remaining candidate searches and coordination can make parallel execution
-slower than CPU heap Dijkstra, especially on sparse road networks.
-
-## Tests
-
-Python 3.11+ and `requirements.txt` are required for pipeline tests, not for
-running the C++ executable against an existing CSR graph.
+For a fresh network download, then conversion:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-cmake --build build-cuda --config Debug
-ctest --test-dir build-cuda -C Debug --output-on-failure -V
+.\.venv\Scripts\python.exe python/download_osm.py --data-dir build-data
+.\.venv\Scripts\python.exe python/convert_to_csr.py --graphml build-data/raw/pohjois_savo.graphml `
+  --output-dir build-data/processed
 ```
 
-CTest includes the serial algorithms, parallel backend tests, CSR reader, and
-Python integration. Backend tests also check explicit unavailability and default
-heap selection. They exercise parallel edges, unsorted rows, deterministic ties,
-zero-weight cycles, disconnected nodes, multiple CUDA blocks, and overflow.
-CPU-only configurations check unavailable backends without requiring a GPU.
-
-The full-region Python reference test can take several minutes. For a quicker
-run against a particular executable:
-
-```powershell
-$env:PSV_EXECUTABLE = (Resolve-Path build-cuda/Debug/psv_dijkstra.exe).Path
-$env:PSV_CSR_PROBE = (Resolve-Path build-cuda/Debug/test_csr.exe).Path
-.\.venv\Scripts\python.exe -m pytest tests/test_pipeline.py -k "not real_osm" -q
-```
-
-The existing real-OSM pytest case checks heap against NetworkX Bellman-Ford.
-Parallel implementations are checked against Bellman-Ford on synthetic inputs;
-the benchmark below can compare their complete regional results against heap.
+Nominatim verifies the boundary; Overpass supplies roads. Add
+`--pbf C:/path/to/extract.osm.pbf` to download_osm.py for local PBF roads
+(boundary verification still needs network access). `--user-agent` or
+`OSM_USER_AGENT` sets the application identifier. Outputs record provenance and
+checksums. Point GUI/benchmark commands at the resulting CSR and matching CSV.
+Both GraphML and `.graphml.gz` are supported. Original regional datasets and
+some validation artifacts are tracked; the examples use ignored build folders.
 
 ## Desktop GUI
 
-The GUI requires the pinned PySide6 package in `requirements.txt`. It uses Qt
-Widgets and Graphics View, with no browser, web server, map-tile download, or
-additional plotting library. All route calculations run in `psv_dijkstra`.
-
-Launch from the repository root after building a C++ executable:
-
 ```powershell
 .\.venv\Scripts\python.exe -m python.gui
-# Explicit files, including a node CSV with a nonstandard filename:
-.\.venv\Scripts\python.exe -m python.gui --executable build-cuda/Release/psv_dijkstra.exe --graph data/processed/graph.csr --nodes data/processed/graph_nodes.csv
+# Override the executable and data files:
+.\.venv\Scripts\python.exe -m python.gui --executable build-cuda/Release/psv_dijkstra.exe `
+  --graph data/processed/graph.csr --nodes data/processed/graph_nodes.csv
 ```
 
-The default graph is `data/processed/graph.csr`; its companion node file is
-`<graph stem>_nodes.csv` in the same directory. The File menu can open a different
-CSR/CSV pair or select an executable. `PSV_EXECUTABLE`, when set, overrides
-executable discovery. Otherwise the GUI searches `build-cuda/Release`,
-`build/Release`, `build-cuda`, `build`, `build-cuda/Debug`, then `build/Debug`,
-using the platform's executable suffix. Selecting a CUDA build does not select
-the CUDA algorithm: heap remains the initial choice.
+The default graph is `data/processed/graph.csr`; its node CSV is
+`<graph stem>_nodes.csv` beside it. The File menu selects other files.
+`PSV_EXECUTABLE` overrides discovery; otherwise the GUI searches
+`build-cuda/Release`, `build/Release`, `build-cuda`, `build`, `build-cuda/Debug`,
+then `build/Debug`, using the platform's suffix. Startup/reselection probes
+backends and disables unavailable choices with reason tooltips. Heap stays the
+initial algorithm even with a CUDA executable.
 
-- Pick start/end on the map, or enter internal node indices. A click snaps to
-  the closest node within 18 screen pixels. Coordinates and OSM IDs appear
-  below the inputs. Swap reverses the endpoints; direction restrictions remain
-  enforced. A snapped node can belong to a disconnected component.
-- Drag to pan, scroll or use +/- to zoom, and use Fit map / Fit route to frame
-  the network or result. Escape leaves endpoint-selection mode. Start is green,
-  destination red, and the route orange.
-- Stop-at-destination is initially checked. Uncheck for full SSSP. Full mode
-  still displays the chosen destination's route; changing endpoints causes a
-  new calculation, without reusing a cached predecessor tree.
-- All six algorithms are offered. Startup runs `--backends`, with algorithm
-  selection disabled until the check completes. Unavailable options are greyed
-  out, marked unavailable, and have a reason in their tooltip. Requests never
-  silently switch algorithms. The check repeats when changing executables.
-  Advanced settings expose bucket width, OpenMP workers, and a per-request
-  timeout (initially 120 seconds). OpenMP controls are dimmed and disabled except
-  for `cpu-parallel` and `delta-cpu` when the executable supports OpenMP; CPU
-  delta-stepping remains usable serially without OpenMP.
-- Bucket width is under Advanced settings, dimmed and disabled outside
-  delta-stepping. The discrete
-  slider uses 100 m steps through 1000 m, 1000 m steps through 10000 m,
-  10000 m steps through 100000 m, 100000 m steps through 1000000 m, and
-  1000000 m steps through 10000000 m. The numeric field also accepts exact
-  integer widths within 100..10000000 m. Reset to default restores the preset.
-  **Every change between CPU/CUDA delta backends or full/early-stop mode resets
-  a manual override:** CPU full/early = 1000/300 m; CUDA full/early =
-  1000000/10000 m. Classic algorithms receive no `--delta` argument.
-- Calculate launches an asynchronous `QProcess`; Cancel stops it. Busy
-  calculations show an indeterminate indicator, since the CLI does not report
-  intermediate progress. Loading uses a background worker with stage progress.
-  Closing the window stops background work before releasing it.
-- Results distinguish C++ `algorithm_ms` from total request time, which also
-  includes executable startup, graph I/O, route reconstruction, and JSON output.
-  The GUI does not write a full distances CSV. Optional GPU timing details use
-  the same definitions as the benchmark. Endpoint/settings changes clear the
-  old highlighted route and mark the result outdated.
+- **Endpoints:** initially 0 and 100000. Smaller graphs use the largest valid
+  lower power of ten (75 nodes: 10; 800: 100); one-node graphs use 0.
+  Enter internal indices or pick within 18 screen pixels of a node. Rows show
+  OSM IDs/coordinates. Snapped nodes may belong to disconnected components.
+- **Middle points:** Add numbers a new row and starts picking immediately.
+  Remove renumbers later rows; the button is below Pick beside OSM/coordinates.
+  Reverse route reverses all stops. Dataset reload clears middles and resets
+  endpoints. One sidebar scrollbar covers endpoints/settings; Calculate/Cancel
+  remain pinned below it.
+- **Navigation:** drag to pan, scroll or use +/- to zoom, and Fit map / Fit route
+  to frame the view. Markers are green (start), red (end), numbered blue (middle).
+  Other button/dropdown/numeric-field/bucket-slider clicks cancel picking and
+  perform their normal action. Pick switches endpoint; sidebar scrolling and
+  map-wheel zoom preserve picking. Escape exits.
+- **Calculation:** sequential C++ processes route through the displayed stops.
+  Each directed leg is validated before joining; repeated stops and return trips
+  are valid. Failed/unreachable legs identify the connection, stop remaining
+  work, and leave no completed-route overlay. Cancel stops current/remaining
+  work; closing waits for worker cleanup. Early stop is initially enabled;
+  disabling it runs full SSSP separately from each leg's start.
+- **Advanced:** timeout is 120 seconds for the **whole journey**, including
+  startups/graph loads. OpenMP threads are dimmed outside cpu-parallel/delta-cpu
+  or without OpenMP; CPU delta can still run serially. Bucket controls are dimmed
+  outside delta modes. Changing delta backend or full/early mode resets manual
+  widths to the [tuned defaults](#automatic-bucket-defaults). Slider steps are
+  100 m through 1000 m, 1000 through 10000, 10000 through 100000, 100000 through
+  1000000, then 1000000 through 10000000 m. Exact integer entry spans
+  100..10000000 m; Reset restores the preset. Classic modes receive no `--delta`.
+- **Results:** distance and C++/GPU times sum over legs. Request time additionally
+  includes startup, graph I/O, reconstruction and JSON. Summed finalized-node
+  visits are not unique nodes. C++ reloads the graph per leg; no persistent graph
+  or predecessor cache is used. The GUI writes no distances CSV. Changes clear
+  the old route. Calculation progress is indeterminate (CLI reports no
+  intermediate progress); status identifies the active leg.
+- **Highlighting:** hover within eight screen pixels to thicken a leg and fade
+  others to 25%. Arrows follow travel direction. Shared sections initially pick
+  the earliest matching leg, retaining it without flicker; **right-click cycles
+  overlapping legs**. A fixed-height label shows connection/distance/shared-leg
+  numbers without shifting the map. Highlight leg pins a choice; All legs
+  restores hover. Right-click updates an existing pin/dropdown together. Hover
+  pauses during dragging/picking; pins survive navigation. Route edits/reload
+  clear both. Zero-geometry legs use rings.
 
-The loader checks the CSR layout, CSV row count/index order, and coordinates
-before rendering. Use the CSV generated with that exact graph: CSR contains no
-OSM IDs with which to verify the CSV's provenance. Roads are projected to a
-local planar coordinate system for display;
-route lengths always come from the original CSR metre weights. The unsimplified
-node chains retain road curvature. Display-only deduplication of coincident
-segments does not change the directed graph or parallel edges. Spatial tiles
-provide detailed vector drawing at close zoom, and a cached overview image
-reduces redraw cost at regional zoom. The map contains roads rather than street
-labels, buildings, addresses, or background tiles.
+Background loading validates CSR layout, CSV count/index order, and coordinates.
+Use the CSV from the exact conversion: CSR has no OSM IDs to prove provenance.
+Local planar projection affects display only; distances use CSR metre weights.
+Display-only segment deduplication preserves directed/parallel routing edges;
+unsimplified node chains retain curvature. Tiles and a cached overview reduce
+redraw cost. The map shows roads/routes, without addresses, street labels,
+buildings, or online background tiles.
 
-Run the GUI checks without opening windows:
+Initial local UI checks prepared 448192 nodes/896165 edges in 466 tiles in about
+7-9 seconds. Full heap/CPU-delta/GPU-delta source 0 to 448191 showed 68.644 km;
+early source 0 to 1 showed 0.503 km. These are UI smoke observations, not new
+algorithm benchmarks or a repeat of the regional Bellman-Ford test.
+
+## Run
+
+Source/target are internal indices mapped by graph_nodes.csv. Heap is default;
+explicit unavailable requests fail without fallback. JSON uses `null` for
+unreachable length. Check and run the selected build:
 
 ```powershell
-$env:PSV_EXECUTABLE = (Resolve-Path build-cuda/Release/psv_dijkstra.exe).Path
-.\.venv\Scripts\python.exe -m pytest tests/test_gui.py -q
-# Once CMake has been reconfigured with PySide6 installed:
-ctest --test-dir build-cuda -C Release -L gui --output-on-failure
+.\build-cuda\Release\psv_dijkstra.exe --backends
+.\build-cuda\Release\psv_dijkstra.exe --graph data/processed/graph.csr --source 0 --target 40 `
+  --algorithm heap --early-stop
 ```
 
-`python_gui` is an optional CTest, registered when the selected Python can import
-PySide6. The tests set `QT_QPA_PLATFORM=offscreen`; no pytest-qt plugin is needed.
-Checks cover bucket reset transitions, flag construction, malformed datasets,
-projection/snapping, map clicks/layers, JSON process errors/cancellation/timeouts,
-and routing through every available backend in full and early-stop modes on a
-small directed fixture, including unreachable and identical endpoints. The full
-regional Bellman-Ford reference remains in the separate pipeline test.
+Other `--algorithm` values are phased, cpu-parallel, cuda, delta-cpu, delta-cuda;
+see [README's table](../README.md#run). Omit `--early-stop` for full SSSP, add
+`--distances output.csv` for arrays, or `--delta 500` to override bucket width.
+Set workers with `$env:OMP_NUM_THREADS = "4"`.
 
-The initial regional GUI check loaded all 448,192 nodes and 896,165 directed
-edges into 466 display tiles in about 7–9 seconds on the local machine. Map
-preparation ran in a background thread. Full heap/CPU-delta/GPU-delta runs from
-0 to 448191 displayed the same 68.644 km route length; early heap/CUDA and both
-delta backends from 0 to 1 displayed 0.503 km. These are local UI smoke checks,
-not new algorithm benchmarks or a repeat of the regional Bellman-Ford test.
+Classic backends settle one global minimum per round. OpenMP uses worker-owned
+heaps. CUDA caches minima per 256-node tile, refreshes dirty tiles using warp
+reductions, and batches up to 1024 rounds per launch in one block. This avoids
+cooperative-grid requirements but limits occupancy. Data stays on-device within
+a calculation; each invocation allocates/uploads again. Coordination costs can
+outweigh parallelism on sparse road networks.
+
+## Tests
+
+After setup/configuration, build and run the full suite:
+
+```powershell
+cmake --build build-cuda --config Release
+ctest --test-dir build-cuda -C Release --output-on-failure
+```
+
+CTest registers dijkstra_cpu, dijkstra_backends, delta_stepping, early_stop,
+csr_reader, python_pipeline, and optional python_gui. GUI registration requires
+PySide6 at configuration time; reconfigure after installing it. Add `-V` to
+stream output. The regional NetworkX Bellman-Ford case can take minutes and skips
+without GraphML. It checks heap; synthetic cases cover all available backends,
+ties, parallel/unsorted edges, zero cycles, disconnected nodes, invalid inputs,
+overflow, bucket widths, and CUDA batches. CPU-only configurations also check
+explicit backend unavailability.
+
+Quick C++/GUI checks and Python checks excluding the long case:
+
+```powershell
+ctest --test-dir build-cuda -C Release -L cpp --output-on-failure
+$env:PSV_EXECUTABLE = (Resolve-Path build-cuda/Release/psv_dijkstra.exe).Path
+$env:PSV_CSR_PROBE = (Resolve-Path build-cuda/Release/test_csr.exe).Path
+.\.venv\Scripts\python.exe -m pytest tests/test_pipeline.py -k "not real_osm" -q
+.\.venv\Scripts\python.exe -m pytest tests/test_gui.py tests/test_tuning.py -q
+```
+
+CTest sets PYTHONPATH and the two executable variables itself. Direct pipeline
+runs otherwise search build/, build/Debug/, build/Release/; set both variables
+for another build. GUI checks use QT_QPA_PLATFORM=offscreen and need no pytest-qt
+plugin. They cover corruption, mapping/picking, bucket resets, availability,
+process cancellation/timeouts, ordered/repeated stops, aggregate results,
+scrolling, hover/return directions, and pinned-leg synchronization. Use `-L gui`
+for GUI-only CTest. test_tuning.py runs separately from CTest.
+
+Standalone Bellman-Ford fixture/reference regeneration:
+
+```powershell
+.\.venv\Scripts\python.exe python/validate.py --executable build-cuda/Release/psv_dijkstra.exe `
+  --real-graphml data/raw/pohjois_savo.graphml.gz --output-dir build-cuda/validation
+```
+
+This runs 13 synthetic graphs (heap/phased) plus three regional heap sources if
+GraphML exists. Its default output is the tracked data/processed/validation;
+the explicit build-folder output above keeps this run separate. No download is needed.
 
 ## Benchmark
 
-Use **Release** binaries. The benchmark uses only Python's standard library,
-compares Dijkstra distance/predecessor/settled fields with heap via CSV hashes,
-and checks delta distances (relative tolerance 1e-10, absolute 1e-8), reachability,
-predecessor-edge weights/direction, and an acyclic rooted predecessor forest,
-and imposes a timeout per subprocess. It always includes a heap reference.
+Use Release binaries. The standard-library-only script always includes a heap
+reference and reports unavailable backends/timeouts separately from verified
+results. Specify all six algorithms explicitly: the default list excludes delta.
+Use the [regional commands](#regional-benchmark-results) for full and target-40
+runs. A small grid check is:
 
 ```powershell
-.\.venv\Scripts\python.exe python/benchmark.py --executable build-cuda/Release/psv_dijkstra.exe --nodes 4096 --repeats 3 --output build-cuda/benchmark-grid.json
-.\.venv\Scripts\python.exe python/benchmark.py --executable build-cuda/Release/psv_dijkstra.exe --graph data/processed/graph.csr --repeats 1 --timeout 60 --output build-cuda/benchmark-region.json
+.\.venv\Scripts\python.exe python/benchmark.py --executable build-cuda/Release/psv_dijkstra.exe `
+  --nodes 4096 --algorithms heap phased cpu-parallel cuda delta-cpu delta-cuda --threads 4 `
+  --repeats 3 --timeout 300 --output build-cuda/benchmark-grid.json
 ```
 
-`--threads` defaults to 4. Use `--algorithms heap cpu-parallel cuda` to omit
-the slow serial scan. A timeout is reported as `timeout`, not as a verified
-result or a speed measurement.
+Defaults are four workers and a 60-second timeout **per subprocess**, not for
+the whole benchmark. A timeout is not a speed measurement. Full classic arrays
+(distances/predecessors/settled flags) match heap via CSV hashes. Delta permits
+equally short paths: distance tolerances are relative 1e-10/absolute 1e-8, with
+reachability, edge direction/tightness, sentinel-state, and rooted acyclic
+predecessor-forest checks.
 
-- `algorithm_ms`: host elapsed time including validation, result initialization,
-  backend selection/initialization, allocations, transfers, GPU synchronization,
-  and resource cleanup. Excludes disk I/O and route reconstruction.
-- `gpu_compute_ms`: CUDA-event time covering the Dijkstra phase loop, including
-  control transfers, synchronization and gaps between kernel launches. It is
-  not a sum of kernel execution times alone.
-- `gpu_upload_ms` / `gpu_download_ms`: event timings for initial graph/result
-  upload and final result download. They do not include allocation time.
-- Benchmark `process_ms`: full subprocess duration including startup, graph
-  loading, route reconstruction, and distance-CSV output.
+- `algorithm_ms`: host time for validation, result initialization, backend setup,
+  allocation, transfers, synchronization, and cleanup; excludes disk I/O/route
+  reconstruction.
+- `gpu_compute_ms`: CUDA-event phase time including snapshots, control transfers,
+  synchronization, host-control gaps, and gaps between kernels; not kernel-only.
+- `gpu_upload_ms` / `gpu_download_ms`: initial graph/result upload and final
+  download event times; excludes allocation.
+- `process_ms`: subprocess duration including startup, loading, reconstruction,
+  and distance-CSV output.
 
-Each benchmark trial uses a separate process and uploads the graph again.
-Persistent-device/GUI workloads need separate measurements. Distinct hardware,
-CPU thread counts, system load, and graph structure affect results.
+Each trial starts a fresh process and reuploads the graph. Persistent-device/GUI
+workloads require separate measurements. Hardware, graph structure, thread
+count, and system load affect results; parallelism need not beat heap.
 
 ### Target-only / early-stop benchmarking
 
-Use the same flag in the executable or benchmark script:
+Add `--target 40 --early-stop` to benchmark a route. Classic Dijkstra stops
+immediately after target settlement, including inside CUDA's batch. Delta
+finalizes its whole target bucket, potentially doing more work. Unreachable
+targets exhaust all reachable nodes.
 
-```powershell
-.\build-cuda\Release\psv_dijkstra.exe --graph data/processed/graph.csr --source 0 --target 1 --algorithm heap --early-stop
-.\.venv\Scripts\python.exe python/benchmark.py --executable build-cuda/Release/psv_dijkstra.exe --graph data/processed/graph.csr --source 0 --target 1 --algorithms heap phased cpu-parallel cuda delta-cpu delta-cuda --delta 100 --early-stop --repeats 3 --output build-cuda/benchmark-early-region.json
-```
+`early_stop`, `search_complete`, and `settled_nodes` describe results. False
+`search_complete` means partial, not an uncertain target distance. Partial CSVs
+add `state=final/tentative/unknown`; unsettled infinity is **unknown**, not known-
+unreachable. Reconstructing an unfinalized node raises an error. Full CSV layout
+stays compatible, with unreachable distance `inf`.
 
-Omit `--early-stop` to benchmark full SSSP with the same endpoints. Dijkstra
-stops when the target is settled, before relaxing its outgoing edges. CUDA
-stops inside the device batch, not after an extra 1024 rounds. Delta-stepping
-waits until no bucket at or below the target's bucket remains pending; a large
-delta can therefore process much more of the graph. If the target is unreachable,
-all reachable nodes are processed and the search completes normally.
+An **untimed full heap reference** precedes early-stop trials. Target reachability/
+distance and every finalized node's distance/forest are checked. Reference and
+validation add script wall time but not trial time. Setup and full-size arrays
+still cost time on short queries. Source-equals-target is trivial; a far target
+may require nearly full SSSP.
 
-JSON includes `early_stop`, `search_complete`, and `settled_nodes`. A false
-`search_complete` conservatively identifies a partial result; it does not imply
-that the requested route is uncertain. For partial results, `--distances` adds
-a `state` column: `final`, `tentative`, or `unknown`. Unsettled infinity is
-**unknown**, not proof of unreachability. Reconstructing an unfinalized node
-from a partial result raises an error. Full-source CSV output stays compatible.
+### Regional benchmark results
 
-The benchmark computes an **untimed full-source heap reference** first in
-early-stop mode. Each timed trial must match its target reachability/distance;
-every finalized node's distance and predecessor forest are also checked. The
-reference cost is excluded from trial times, but still contributes to script
-wall time. Reported timings include full CSR validation, full-size working-array
-allocation, and GPU setup/transfers, so early stopping mainly reduces search
-work; it does not remove those costs. Results are endpoint-dependent: selecting
-the source itself is trivial and a farthest target can require nearly full SSSP.
-
-### Regional benchmark results (2026-11-15)
-
-User-provided benchmark output from the CUDA-enabled Windows Release build,
+Benchmark output from the CUDA-enabled Windows Release build,
 using an NVIDIA GeForce RTX 3070 and four OpenMP workers. Both runs loaded
 `data/processed/graph.csr`: **448,192 nodes and 896,165 directed edges**.
 Each algorithm ran three times in separate processes, with a **300-second
 per-trial timeout** and no explicit bucket override.
 
-The first run used early stopping from internal node **0 to 1**. The second
+The early-stop run used internal nodes **0 to 40**. The full run
 computed **full SSSP from node 0**, with node 448191 selected for route output;
 that target does not limit the full search. Times below are median
 `algorithm_ms`, in milliseconds, including setup and GPU transfers but excluding
@@ -303,12 +315,12 @@ disk I/O and route reconstruction. Rows are ordered by full-search time.
 
 | Algorithm | Early stop (ms) | Full SSSP (ms) | Early-stop finalized nodes |
 | --- | ---: | ---: | ---: |
-| `heap` | 2.7571 | 32.2947 | 15 |
-| `delta-cpu` | 3.3380 | 107.9911 | 16 |
-| `delta-cuda` | 103.9501 | 295.0090 | 1,310 |
-| `cpu-parallel` | 3.0676 | 520.3173 | 15 |
-| `cuda` | 89.6741 | 2829.6450 | 15 |
-| `phased` | 6.1223 | 109800.1630 | 15 |
+| `heap` | 4.3197 | 32.2947 | 24,648 |
+| `delta-cpu` | 10.4924 | 107.9911 | 24,652 |
+| `delta-cuda` | 171.2569 | 295.0090 | 30,408 |
+| `cpu-parallel` | 33.3188 | 520.3173 | 24,648 |
+| `cuda` | 298.0523 | 2829.6450 | 24,648 |
+| `phased` | 6635.7295 | 109800.1630 | 24,648 |
 
 All full searches completed and finalized **440,079 reachable nodes**; the
 remaining 8,113 nodes were unreachable from source 0. All early-stop searches
@@ -325,15 +337,22 @@ untimed full heap reference, including every finalized node.
 
 Heap was fastest in both runs. For full SSSP, delta CPU was the fastest parallel
 option, followed by delta CUDA, OpenMP Dijkstra, CUDA Dijkstra, and serial
-phased Dijkstra. The early-stop ranking was heap, OpenMP Dijkstra, delta CPU,
-phased, CUDA, then delta CUDA. These measurements cover one source and one
-short early-stop route; other endpoints and hardware can change the ranking.
+phased Dijkstra. The early-stop ranking was heap, delta CPU, OpenMP
+Dijkstra, delta CUDA, CUDA Dijkstra, then serial phased Dijkstra. These
+measurements cover one source and one early-stop target; other endpoints and
+hardware can change the ranking.
 
 Reproduce with separate output files to retain both reports:
 
 ```powershell
-.\.venv\Scripts\python.exe python/benchmark.py --executable build-cuda/Release/psv_dijkstra.exe --graph data/processed/graph.csr --algorithms heap phased cpu-parallel cuda delta-cpu delta-cuda --source 0 --target 1 --early-stop --threads 4 --repeats 3 --timeout 300 --output build-cuda/benchmark-early-comparison.json
-.\.venv\Scripts\python.exe python/benchmark.py --executable build-cuda/Release/psv_dijkstra.exe --graph data/processed/graph.csr --algorithms heap phased cpu-parallel cuda delta-cpu delta-cuda --source 0 --target 448191 --threads 4 --repeats 3 --timeout 300 --output build-cuda/benchmark-full-comparison.json
+.\.venv\Scripts\python.exe python/benchmark.py --executable build-cuda/Release/psv_dijkstra.exe `
+  --graph data/processed/graph.csr --algorithms heap phased cpu-parallel cuda delta-cpu delta-cuda `
+  --source 0 --target 40 --early-stop --threads 4 --repeats 3 --timeout 300 `
+  --output build-cuda/benchmark-early-comparison.json
+.\.venv\Scripts\python.exe python/benchmark.py --executable build-cuda/Release/psv_dijkstra.exe `
+  --graph data/processed/graph.csr --algorithms heap phased cpu-parallel cuda delta-cpu delta-cuda `
+  --source 0 --target 448191 --threads 4 --repeats 3 --timeout 300 `
+  --output build-cuda/benchmark-full-comparison.json
 ```
 
 ### Local optimization results
@@ -356,14 +375,16 @@ for this single-source workload. The optimized report is saved locally as
 ## Delta-stepping
 
 Delta-stepping groups distance labels into buckets of width `--delta` (metres;
-default selected by backend and search mode). Within a bucket it repeatedly relaxes light edges (weight <= delta)
+default selected by backend and search mode). Each bucket repeatedly relaxes
+light edges (weight <= delta)
 until closure, then relaxes heavy edges for the processed vertices. It can revisit
 vertices and is a separate shortest-path algorithm, not classic Dijkstra.
 
 ```powershell
-.\build-cuda\Release\psv_dijkstra.exe --graph data/processed/graph.csr --source 0 --target 1 --algorithm delta-cpu --delta 10000
-.\build-cuda\Release\psv_dijkstra.exe --graph data/processed/graph.csr --source 0 --target 1 --algorithm delta-cuda --delta 100000
-.\.venv\Scripts\python.exe python/benchmark.py --executable build-cuda/Release/psv_dijkstra.exe --graph data/processed/graph.csr --algorithms heap cpu-parallel cuda delta-cpu delta-cuda --delta 10000 --repeats 3 --output build-cuda/delta-comparison.json
+.\build-cuda\Release\psv_dijkstra.exe --graph data/processed/graph.csr --source 0 --target 1 `
+  --algorithm delta-cpu --delta 10000
+.\build-cuda\Release\psv_dijkstra.exe --graph data/processed/graph.csr --source 0 --target 1 `
+  --algorithm delta-cuda --delta 100000
 ```
 
 CPU expansion uses OpenMP on frontiers of at least 128 vertices, with worker-local
@@ -383,14 +404,14 @@ Delta must be finite and positive. Extreme bucket indices saturate rather than
 overflowing an integer conversion. Negative/nonfinite weights and distance-sum
 overflow retain the existing error behavior. `--backends` reports delta support;
 explicit CUDA delta requests fail if unavailable. Bucket width changes performance
-and must be benchmarked;
-larger is not uniformly better. Tests include shared destinations, zero cycles,
+and must be benchmarked; larger is not uniformly better. Tests include shared destinations, zero cycles,
 disconnected graphs, overflow, multiple widths, and Bellman-Ford comparisons.
 
 ### Reproduce bucket-width tuning
 
 ```powershell
-.\.venv\Scripts\python.exe python/tune_delta.py --executable build-cuda/Release/psv_dijkstra.exe --graph data/processed/graph.csr --output build-cuda/delta-tuning.json
+.\.venv\Scripts\python.exe python/tune_delta.py --executable build-cuda/Release/psv_dijkstra.exe `
+  --graph data/processed/graph.csr --output build-cuda/delta-tuning.json
 ```
 
 This screens eight widths (25 through 100000 metres) at three starting nodes,
@@ -406,7 +427,7 @@ allow custom experiments. Measurements use separate cold processes. The JSON
 is checkpointed during the run; only `status="completed"` means all confirmation
 checks passed. Recommendations describe the best **tested** widths, not a
 universal optimum, and do not alter CLI defaults. Ranking unit tests can be run
-with `python -m pytest tests/test_tuning.py -q`.
+with `.\.venv\Scripts\python.exe -m pytest tests/test_tuning.py -q`.
 
 The expanded local sweep (363 timed trials, including an upper-range CUDA probe)
 used sources 0, 224096 and 448191, with nine nontrivial early-stop routes. All 54
@@ -430,15 +451,16 @@ dominated by longer routes. Short-query GPU times include substantial cold
 initialization costs, making small differences noisy. These are best-tested
 starting settings, not universal optima or statistically established winners.
 Unreachable targets and all other graph components were not sampled separately.
-**These are now the CLI and benchmark defaults when --delta is omitted.**
-An explicit --delta overrides them. The low-level C++ APIs retain their existing
-explicit/default width behavior; the CLI applies the backend/mode policy.
+These settings became the CLI/benchmark defaults; see [the policy below](#automatic-bucket-defaults).
+Low-level C++ APIs retain their existing width defaults.
 
 Reports are local ignored `build-cuda/delta-tuning.json` and
 `build-cuda/delta-tuning-upper.json`. The latter is reproducible with:
 
 ```powershell
-.\.venv\Scripts\python.exe python/tune_delta.py --executable build-cuda/Release/psv_dijkstra.exe --graph data/processed/graph.csr --backends delta-cuda --modes full --deltas 100000 300000 1000000 --output build-cuda/delta-tuning-upper.json
+.\.venv\Scripts\python.exe python/tune_delta.py --executable build-cuda/Release/psv_dijkstra.exe `
+  --graph data/processed/graph.csr --backends delta-cuda --modes full --deltas 100000 300000 1000000 `
+  --output build-cuda/delta-tuning-upper.json
 ```
 
 `--backends` and `--modes` allow focused follow-up sweeps. Heap Dijkstra is still
