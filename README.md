@@ -33,6 +33,19 @@ flag `-DPSV_ENABLE_CUDA=OFF` to disable CUDA explicitly. See
 existing build settings, CPU-only builds, and other platforms.
 The regional CSR and node mappings are included; no data download is needed.
 
+On macOS, use these commands from the repository root. CUDA is disabled;
+OpenMP is detected when available, and the heap and CPU delta backends work
+without it:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPSV_ENABLE_CUDA=OFF
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+.venv/bin/python -m python.gui
+```
+
 ## Desktop GUI
 
 After building, launch from the repository root:
@@ -111,6 +124,11 @@ The regional Bellman-Ford reference test can take several minutes. See
 definitions, and tuning. The
 [regional results](tests/TESTING.md#regional-benchmark-results)
 compare all six algorithms, including the updated early-stop target 40.
+
+## License
+
+The project's source code is available under the [MIT License](LICENSE).
+The included OpenStreetMap data is licensed separately as described below.
 
 ## OpenStreetMap data attribution
 
